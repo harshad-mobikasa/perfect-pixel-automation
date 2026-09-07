@@ -7,6 +7,8 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request, { params }) {
   const { jobId } = await params
+  const requestUrl = new URL(request.url)
+  const requestedFile = requestUrl.searchParams.get('file')
   const job = jobMap.get(jobId)
 
   if (!job) {
@@ -17,35 +19,56 @@ export async function GET(request, { params }) {
     return Response.json({ error: `Job is not ready (status: ${job.status})` }, { status: 400 })
   }
 
-  const { pdfPath, workDir, suite } = job
+  const { pdfPath, reportFiles, workDir, suite } = job
+  const selectedReport =
+    requestedFile && Array.isArray(reportFiles)
+      ? reportFiles.find((file) => file.fileName === requestedFile)
+      : null
+  const selectedPath = selectedReport?.path ?? pdfPath
+  const downloadFileName = selectedReport?.fileName ?? `${suite}-audit.pdf`
+  const keepArtifactsForMoreDownloads = Boolean(
+    requestedFile && Array.isArray(reportFiles) && reportFiles.length > 1,
+  )
 
   // Remove from map immediately — download is one-shot
-  jobMap.delete(jobId)
+  if (!selectedPath) {
+    return Response.json({ error: 'Report file not found' }, { status: 404 })
+  }
 
-  const fsStream = createReadStream(pdfPath)
+  if (!keepArtifactsForMoreDownloads) {
+    jobMap.delete(jobId)
+  }
+
+  const fsStream = createReadStream(selectedPath)
 
   const webStream = new ReadableStream({
     start(controller) {
       fsStream.on('data', (chunk) => controller.enqueue(new Uint8Array(chunk)))
       fsStream.on('end', () => {
         controller.close()
-        if (workDir) rm(workDir, { recursive: true, force: true }).catch(() => {})
+        if (!keepArtifactsForMoreDownloads) {
+          if (workDir) rm(workDir, { recursive: true, force: true }).catch(() => {})
+        }
       })
       fsStream.on('error', (err) => {
         controller.error(err)
-        if (workDir) rm(workDir, { recursive: true, force: true }).catch(() => {})
+        if (!keepArtifactsForMoreDownloads) {
+          if (workDir) rm(workDir, { recursive: true, force: true }).catch(() => {})
+        }
       })
     },
     cancel() {
       fsStream.destroy()
-      if (workDir) rm(workDir, { recursive: true, force: true }).catch(() => {})
+      if (!keepArtifactsForMoreDownloads) {
+        if (workDir) rm(workDir, { recursive: true, force: true }).catch(() => {})
+      }
     },
   })
 
   return new Response(webStream, {
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${suite}-audit.pdf"`,
+      'Content-Disposition': `attachment; filename="${downloadFileName}"`,
     },
   })
 }

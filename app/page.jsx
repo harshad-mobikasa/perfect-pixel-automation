@@ -25,7 +25,7 @@ const SUITES = [
   {
     id: 'lighthouse',
     label: 'Lighthouse',
-    estSec: 150,
+    estSec: 240,
     description: 'Run performance, accessibility, best practices, and SEO scores.',
   },
   {
@@ -50,6 +50,13 @@ const STEP_META = {
   review: 'Review & Run',
 }
 
+const TYPOGRAPHY_BLOCK_OPTIONS = [
+  { name: 'HEADINGS', label: 'Headings', matches: 'h1 to h6' },
+  { name: 'PARAGRAPH', label: 'Paragraph', matches: 'p' },
+  { name: 'ANCHOR', label: 'Anchor', matches: 'a' },
+  { name: 'BUTTON', label: 'Button', matches: 'button' },
+]
+
 function makeId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -66,6 +73,10 @@ function cloneTypographyTemplate() {
   return JSON.parse(JSON.stringify(defaultTypographyTemplate))
 }
 
+function cloneValue(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
 function createPage() {
   return { id: makeId(), name: 'Home Page', url: '/', components: [] }
 }
@@ -75,10 +86,11 @@ function createComponent() {
 }
 
 function createTypographyBlocks() {
-  return Object.entries(cloneTypographyTemplate()).map(([name, value]) => ({
+  const template = cloneTypographyTemplate()
+  return TYPOGRAPHY_BLOCK_OPTIONS.filter((option) => template[option.name]).map((option) => ({
     id: makeId(),
-    name,
-    valueText: JSON.stringify(value, null, 2),
+    name: option.name,
+    value: cloneValue(template[option.name]),
   }))
 }
 
@@ -100,7 +112,19 @@ function normalizePageUrl(value) {
   return `/${trimmed}`
 }
 
-function parseTypographyBlocks(blocks) {
+function setNestedValue(target, path, nextValue) {
+  if (path.length === 0) {
+    return nextValue
+  }
+
+  const [head, ...rest] = path
+  return {
+    ...target,
+    [head]: setNestedValue(target[head], rest, nextValue),
+  }
+}
+
+function buildTypographyObject(blocks) {
   const result = {}
 
   for (const block of blocks) {
@@ -109,14 +133,30 @@ function parseTypographyBlocks(blocks) {
       return { error: 'Each typography block needs a name.' }
     }
 
-    try {
-      result[blockName] = JSON.parse(block.valueText)
-    } catch {
-      return { error: `Typography block "${blockName}" must contain valid JSON.` }
+    if (result[blockName]) {
+      return { error: `Typography block "${blockName}" is duplicated.` }
     }
+
+    result[blockName] = cloneValue(block.value)
   }
 
   return { value: result }
+}
+
+function formatFieldLabel(value) {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function getTypographyBlockMeta(name) {
+  return TYPOGRAPHY_BLOCK_OPTIONS.find((option) => option.name === name) ?? {
+    name,
+    label: formatFieldLabel(name),
+    matches: 'custom tag mapping',
+  }
 }
 
 export default function Home() {
@@ -129,22 +169,48 @@ export default function Home() {
   const [status, setStatus] = useState(null)
   const [jobError, setJobError] = useState(null)
   const [elapsed, setElapsed] = useState(0)
+  const [jobStage, setJobStage] = useState(null)
+  const [jobProgress, setJobProgress] = useState(null)
+  const [jobLastMessage, setJobLastMessage] = useState(null)
+  const [queuePosition, setQueuePosition] = useState(null)
+  const [reportFiles, setReportFiles] = useState([])
+  const [highlightedTypographyBlockId, setHighlightedTypographyBlockId] = useState(null)
+  const [pendingTypographyBlockId, setPendingTypographyBlockId] = useState(null)
   const startRef = useRef(null)
   const pollRef = useRef(null)
   const tickRef = useRef(null)
+  const typographyBlockRefs = useRef({})
 
   const isPixelmatch = activeSuite === 'pixelmatch'
   const isTypography = activeSuite === 'typography'
   const isRunning = status === 'queued' || status === 'running'
   const estSec = SUITES.find((suite) => suite.id === activeSuite)?.estSec ?? 120
   const remaining = Math.max(0, estSec - elapsed)
-  const pct = Math.min(100, Math.round((elapsed / estSec) * 100))
+  const fallbackPct = Math.min(95, Math.round((elapsed / estSec) * 100))
+  const pct = jobProgress ?? fallbackPct
   const steps = ['url', 'suite', 'pages', ...(isPixelmatch || isTypography ? ['config'] : []), 'review']
   const currentStep = steps[stepIndex] ?? 'url'
+  const missingTypographyBlocks = TYPOGRAPHY_BLOCK_OPTIONS.filter(
+    (option) => !typographyBlocks.some((block) => block.name === option.name),
+  )
 
   useEffect(() => {
     setStepIndex((current) => Math.min(current, steps.length - 1))
   }, [steps.length])
+
+  useEffect(() => {
+    if (!pendingTypographyBlockId) return
+
+    const node = typographyBlockRefs.current[pendingTypographyBlockId]
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedTypographyBlockId(pendingTypographyBlockId)
+    }
+
+    setPendingTypographyBlockId(null)
+    const timer = setTimeout(() => setHighlightedTypographyBlockId(null), 1800)
+    return () => clearTimeout(timer)
+  }, [pendingTypographyBlockId, typographyBlocks])
 
   function stopTimers() {
     clearInterval(pollRef.current)
@@ -159,6 +225,11 @@ export default function Home() {
     setStatus(null)
     setJobError(null)
     setElapsed(0)
+    setJobStage(null)
+    setJobProgress(null)
+    setJobLastMessage(null)
+    setQueuePosition(null)
+    setReportFiles([])
     startRef.current = null
   }
 
@@ -168,6 +239,8 @@ export default function Home() {
     setActiveSuite(null)
     setPages([createPage()])
     setTypographyBlocks(createTypographyBlocks())
+    setHighlightedTypographyBlockId(null)
+    setPendingTypographyBlockId(null)
     setStepIndex(0)
   }
 
@@ -226,13 +299,36 @@ export default function Home() {
     )
   }
 
-  function addTypographyBlock() {
-    setTypographyBlocks((current) => [...current, { id: makeId(), name: '', valueText: '{}' }])
+  function addTypographyBlock(blockName) {
+    const template = cloneTypographyTemplate()
+    if (!template[blockName]) return
+
+    const newBlock = {
+      id: makeId(),
+      name: blockName,
+      value: cloneValue(template[blockName]),
+    }
+
+    setTypographyBlocks((current) => {
+      if (current.some((block) => block.name === blockName)) {
+        return current
+      }
+
+      return [...current, newBlock]
+    })
+    setPendingTypographyBlockId(newBlock.id)
   }
 
-  function updateTypographyBlock(blockId, field, value) {
+  function updateTypographyBlockValue(blockId, path, value) {
     setTypographyBlocks((current) =>
-      current.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)),
+      current.map((block) =>
+        block.id !== blockId
+          ? block
+          : {
+              ...block,
+              value: setNestedValue(block.value, path, value),
+            },
+      ),
     )
   }
 
@@ -294,7 +390,7 @@ export default function Home() {
       return ['Add at least one typography block.']
     }
 
-    const parsed = parseTypographyBlocks(typographyBlocks)
+    const parsed = buildTypographyObject(typographyBlocks)
     return parsed.error ? [parsed.error] : []
   }
 
@@ -335,7 +431,7 @@ export default function Home() {
   }
 
   function buildDefinition() {
-    const parsedTypography = parseTypographyBlocks(typographyBlocks)
+    const parsedTypography = buildTypographyObject(typographyBlocks)
     if (parsedTypography.error) {
       throw new Error(parsedTypography.error)
     }
@@ -403,6 +499,9 @@ export default function Home() {
       startRef.current = Date.now()
       setJobId(data.jobId)
       setStatus('queued')
+      setJobStage('Queued')
+      setJobProgress(5)
+      setJobLastMessage('Waiting for an available audit slot')
     } catch (error) {
       setJobError(error instanceof Error ? error.message : 'Failed to start audit')
       setStatus('failed')
@@ -437,6 +536,11 @@ export default function Home() {
         const data = await res.json()
         setStatus(data.status)
         if (data.error) setJobError(data.error)
+        setJobStage(data.stage ?? null)
+        setJobProgress(data.progress ?? null)
+        setJobLastMessage(data.lastMessage ?? null)
+        setQueuePosition(data.queuePosition ?? null)
+        setReportFiles(Array.isArray(data.reportFiles) ? data.reportFiles : [])
 
         if (data.status === 'done' || data.status === 'failed') {
           stopTimers()
@@ -452,8 +556,9 @@ export default function Home() {
     return () => clearInterval(pollRef.current)
   }, [jobId])
 
-  function downloadPdf() {
-    window.location.href = `/api/audits/${jobId}/download`
+  function downloadPdf(fileName) {
+    const suffix = fileName ? `?file=${encodeURIComponent(fileName)}` : ''
+    window.location.href = `/api/audits/${jobId}/download${suffix}`
   }
 
   function goNext() {
@@ -466,6 +571,59 @@ export default function Home() {
   }
 
   const stepErrors = getCurrentStepErrors()
+
+  function renderTypographyFields(blockId, value, path = [], depth = 0) {
+    const entries = Object.entries(value)
+    const allLeafValues = entries.every(
+      ([, nestedValue]) =>
+        typeof nestedValue !== 'object' || nestedValue === null || Array.isArray(nestedValue),
+    )
+
+    return entries.map(([key, nestedValue]) => {
+      const fieldPath = [...path, key]
+      const fieldId = `${blockId}-${fieldPath.join('-')}`
+      const isObject = typeof nestedValue === 'object' && nestedValue !== null && !Array.isArray(nestedValue)
+
+      if (isObject) {
+        return (
+          <div
+            key={fieldId}
+            className={`space-y-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800 ${
+              depth > 0 ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-white dark:bg-zinc-900'
+            }`}
+          >
+            <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              {formatFieldLabel(key)}
+            </div>
+            <div
+              className={
+                allLeafValues
+                  ? 'grid gap-3 md:grid-cols-2 xl:grid-cols-3'
+                  : 'grid gap-4 xl:grid-cols-2'
+              }
+            >
+              {renderTypographyFields(blockId, nestedValue, fieldPath, depth + 1)}
+            </div>
+          </div>
+        )
+      }
+
+      return (
+        <label key={fieldId} className="space-y-1 rounded-lg">
+          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            {formatFieldLabel(key)}
+          </span>
+          <input
+            type="text"
+            value={nestedValue ?? ''}
+            onChange={(e) => updateTypographyBlockValue(blockId, fieldPath, e.target.value)}
+            disabled={isRunning}
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
+          />
+        </label>
+      )
+    })
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6">
@@ -784,18 +942,10 @@ export default function Home() {
                       Edit typography blocks
                     </h2>
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                      Start from the default template. Add or remove blocks as needed for this run.
+                      Each block maps to a real HTML tag group used by the audit.
                     </p>
                   </div>
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={addTypographyBlock}
-                      disabled={isRunning}
-                      className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
-                    >
-                      Add block
-                    </button>
                     <button
                       type="button"
                       onClick={resetTypographyTemplate}
@@ -807,49 +957,84 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  {typographyBlocks.map((block, index) => (
-                    <div key={block.id} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-                      <div className="mb-3 flex items-center justify-between gap-3">
-                        <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-                          Block {index + 1}
-                        </h3>
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+                  <div className="font-medium text-zinc-800 dark:text-zinc-100">Supported tag mapping</div>
+                  <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    {TYPOGRAPHY_BLOCK_OPTIONS.map((option) => (
+                      <div key={option.name} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+                        <div className="text-sm font-medium">{option.label}</div>
+                        <div className="text-xs text-zinc-500 dark:text-zinc-400">Matches: {option.matches}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {missingTypographyBlocks.length > 0 && (
+                  <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+                    <div className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                      Restore a removed block
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {missingTypographyBlocks.map((option) => (
                         <button
+                          key={option.name}
                           type="button"
-                          onClick={() => removeTypographyBlock(block.id)}
-                          disabled={isRunning || typographyBlocks.length === 1}
-                          className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400"
+                          onClick={() => addTypographyBlock(option.name)}
+                          disabled={isRunning}
+                          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
                         >
-                          Remove
+                          Add {option.label}
                         </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {typographyBlocks.map((block) => (
+                    <div
+                      key={block.id}
+                      ref={(node) => {
+                        if (node) {
+                          typographyBlockRefs.current[block.id] = node
+                        }
+                      }}
+                      className={`rounded-xl border p-4 transition ${
+                        highlightedTypographyBlockId === block.id
+                          ? 'border-blue-500 ring-2 ring-blue-500/40'
+                          : 'border-zinc-200 dark:border-zinc-800'
+                      }`}
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                            {getTypographyBlockMeta(block.name).label}
+                          </h3>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                            Matches: {getTypographyBlockMeta(block.name).matches}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => removeTypographyBlock(block.id)}
+                            disabled={isRunning || typographyBlocks.length === 1}
+                            className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
 
                       <div className="space-y-3">
-                        <label className="space-y-1">
-                          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                            Block name
-                          </span>
-                          <input
-                            type="text"
-                            value={block.name}
-                            onChange={(e) => updateTypographyBlock(block.id, 'name', e.target.value)}
-                            disabled={isRunning}
-                            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
-                          />
-                        </label>
-
-                        <label className="space-y-1">
-                          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                            JSON content
-                          </span>
-                          <textarea
-                            value={block.valueText}
-                            onChange={(e) => updateTypographyBlock(block.id, 'valueText', e.target.value)}
-                            disabled={isRunning}
-                            rows={14}
-                            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
-                          />
-                        </label>
+                        <div className="space-y-3">
+                          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                            Typography values for {getTypographyBlockMeta(block.name).label}
+                          </div>
+                          <div className="space-y-3">
+                            {renderTypographyFields(block.id, block.value)}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -948,7 +1133,7 @@ export default function Home() {
                       <div className="flex items-center gap-2">
                         <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
                         <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                          {status === 'queued' ? 'Queued...' : `Running ${activeSuite?.toUpperCase()}...`}
+                          {jobStage ?? (status === 'queued' ? 'Queued...' : `Running ${activeSuite?.toUpperCase()}...`)}
                         </span>
                       </div>
                       <span className="text-xs text-zinc-500 dark:text-zinc-400">{elapsed}s elapsed</span>
@@ -959,8 +1144,17 @@ export default function Home() {
                         style={{ width: `${pct}%` }}
                       />
                     </div>
+                    {jobLastMessage && (
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        Latest update: {jobLastMessage}
+                      </p>
+                    )}
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      {remaining > 0 ? `Estimated time remaining: ${fmtTime(remaining)}` : 'Finishing up...'}
+                      {status === 'queued' && queuePosition
+                        ? `Queue position: ${queuePosition}`
+                        : remaining > 0
+                          ? `Typical remaining time: ${fmtTime(remaining)}`
+                          : 'This run is taking longer than usual, but it is still working.'}
                     </p>
                   </div>
                 )}
@@ -971,12 +1165,24 @@ export default function Home() {
                       Audit complete in {elapsed}s.
                     </p>
                     <div className="flex flex-wrap gap-3">
-                      <button
-                        onClick={downloadPdf}
-                        className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
-                      >
-                        Download PDF report
-                      </button>
+                      {reportFiles.length > 1 ? (
+                        reportFiles.map((file) => (
+                          <button
+                            key={file.fileName}
+                            onClick={() => downloadPdf(file.fileName)}
+                            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
+                          >
+                            Download {file.fileName}
+                          </button>
+                        ))
+                      ) : (
+                        <button
+                          onClick={() => downloadPdf()}
+                          className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        >
+                          Download PDF report
+                        </button>
+                      )}
                       <button
                         onClick={clearAll}
                         className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700"

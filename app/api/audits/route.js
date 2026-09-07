@@ -59,9 +59,16 @@ export async function POST(request) {
   jobMap.set(jobId, {
     status: 'queued',
     createdAt: Date.now(),
+    updatedAt: Date.now(),
+    startedAt: null,
+    completedAt: null,
     workDir: null,
     pdfPath: null,
+    reportFiles: [],
     suite: auditRequest.suite,
+    stage: 'Queued',
+    progress: 5,
+    lastMessage: 'Waiting for an available audit slot',
     error: null,
   })
 
