@@ -1,0 +1,53 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+/playwright-report/
+/test-results/
+/qa-results/
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# audit-kit local assets and generated baselines
+/configs/project-data/reference-images/*
+!/configs/project-data/reference-images/README.md
+!/configs/project-data/reference-images/default/
+!/configs/project-data/reference-images/default/desktop/
+!/configs/project-data/reference-images/default/desktop/.gitkeep
+!/configs/project-data/reference-images/default/mobile/
+!/configs/project-data/reference-images/default/mobile/.gitkeep
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

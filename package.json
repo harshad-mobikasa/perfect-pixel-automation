@@ -1,0 +1,31 @@
+{
+  "name": "automation-testing-tool",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "playwright install chromium firefox webkit && node scripts/patch-audit-kit.mjs",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "report-pixelmatch": "audit-kit report:pixelmatch-pdf:all",
+    "report-typography": "audit-kit report:typography-pdf:all",
+    "report-seo": "audit-kit report:seo-pdf:all",
+    "report-responsive": "audit-kit report:responsive-pdf:all",
+    "report-lighthouse": "audit-kit report:lighthouse-pdf:all",
+    "report-ada": "audit-kit report:ada-pdf:all"
+  },
+  "dependencies": {
+    "@sahilmobikasa/storefront-audit-kit": "latest",
+    "next": "16.3.4",
+    "p-limit": "^7.3.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.4",
+    "tailwindcss": "^4"
+  }
+}
