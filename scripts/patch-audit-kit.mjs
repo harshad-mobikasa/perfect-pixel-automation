@@ -19,6 +19,15 @@ const playwrightConfigPath = join(
   'dist',
   'playwright.config.js',
 )
+const pageHelpersPath = join(
+  process.cwd(),
+  'node_modules',
+  '@sahilmobikasa',
+  'storefront-audit-kit',
+  'dist',
+  'utils',
+  'page-helpers.js',
+)
 
 const originalSnippet = 'await page.goto(pageTargetUrl, { waitUntil: "load" });'
 const brokenPatchedSnippet =
@@ -72,9 +81,167 @@ async function patchPlaywrightConfig() {
   console.log('Applied audit-kit Playwright worker patch')
 }
 
+async function patchHideElementsForScreenshot() {
+  const source = await readFile(pageHelpersPath, 'utf8')
+  const marker = 'HIDE_MATCHED_FIXED_ANCESTORS_PATCH'
+
+  if (source.includes(marker)) {
+    console.log('audit-kit hide-elements patch already applied')
+    return
+  }
+
+  const originalFn = `async function hideElementsForScreenshot(page, options = {}) {
+    const selectors = options.selectors ?? [];
+    const hideFixed = options.hideFixed ?? false;
+    const hideSticky = options.hideSticky ?? false;
+    if (selectors.length === 0 && !hideFixed && !hideSticky) {
+        return;
+    }
+    await page.evaluate(({ selectorList, shouldHideFixed, shouldHideSticky }) => {
+        const hidden = new Map();
+        const hideElement = (element) => {
+            if (hidden.has(element)) {
+                return;
+            }
+            const htmlElement = element;
+            hidden.set(element, {
+                visibility: htmlElement.style.visibility,
+                opacity: htmlElement.style.opacity,
+                pointerEvents: htmlElement.style.pointerEvents,
+            });
+            htmlElement.style.setProperty("visibility", "hidden", "important");
+            htmlElement.style.setProperty("opacity", "0", "important");
+            htmlElement.style.setProperty("pointer-events", "none", "important");
+        };
+        for (const selector of selectorList) {
+            document.querySelectorAll(selector).forEach(hideElement);
+        }
+        if (shouldHideFixed || shouldHideSticky) {
+            document.querySelectorAll("body *").forEach((element) => {
+                const position = window.getComputedStyle(element).position;
+                if ((shouldHideFixed && position === "fixed") || (shouldHideSticky && position === "sticky")) {
+                    hideElement(element);
+                }
+            });
+        }
+        window.__pwScreenshotHidden =
+            hidden;
+    }, {
+        selectorList: selectors,
+        shouldHideFixed: hideFixed,
+        shouldHideSticky: hideSticky,
+    });
+}
+async function restoreElementsAfterScreenshot(page) {
+    await page.evaluate(() => {
+        const hidden = window
+            .__pwScreenshotHidden;
+        if (!hidden) {
+            return;
+        }
+        for (const [element, state] of hidden.entries()) {
+            const htmlElement = element;
+            htmlElement.style.visibility = state.visibility;
+            htmlElement.style.opacity = state.opacity;
+            htmlElement.style.pointerEvents = state.pointerEvents;
+        }
+        delete window
+            .__pwScreenshotHidden;
+    });
+}`
+
+  const patchedFn = `async function hideElementsForScreenshot(page, options = {}) {
+    // ${marker}
+    const selectors = options.selectors ?? [];
+    const hideFixed = options.hideFixed ?? false;
+    const hideSticky = options.hideSticky ?? false;
+    if (selectors.length === 0 && !hideFixed && !hideSticky) {
+        return;
+    }
+    await page.evaluate(({ selectorList, shouldHideFixed, shouldHideSticky }) => {
+        const hidden = new Map();
+        const hideElement = (element) => {
+            if (hidden.has(element)) {
+                return;
+            }
+            const htmlElement = element;
+            hidden.set(element, {
+                visibility: htmlElement.style.visibility,
+                opacity: htmlElement.style.opacity,
+                pointerEvents: htmlElement.style.pointerEvents,
+                display: htmlElement.style.display,
+            });
+            htmlElement.style.setProperty("visibility", "hidden", "important");
+            htmlElement.style.setProperty("opacity", "0", "important");
+            htmlElement.style.setProperty("pointer-events", "none", "important");
+            htmlElement.style.setProperty("display", "none", "important");
+        };
+        const hideFixedAncestors = (element) => {
+            let parent = element.parentElement;
+            while (parent && parent !== document.body) {
+                const position = window.getComputedStyle(parent).position;
+                if (position === "fixed" || position === "sticky") {
+                    hideElement(parent);
+                }
+                parent = parent.parentElement;
+            }
+        };
+        for (const selector of selectorList) {
+            document.querySelectorAll(selector).forEach((element) => {
+                hideElement(element);
+                hideFixedAncestors(element);
+            });
+        }
+        if (shouldHideFixed || shouldHideSticky) {
+            document.querySelectorAll("body *").forEach((element) => {
+                const position = window.getComputedStyle(element).position;
+                if ((shouldHideFixed && position === "fixed") || (shouldHideSticky && position === "sticky")) {
+                    hideElement(element);
+                }
+            });
+        }
+        window.__pwScreenshotHidden =
+            hidden;
+    }, {
+        selectorList: selectors,
+        shouldHideFixed: hideFixed,
+        shouldHideSticky: hideSticky,
+    });
+}
+async function restoreElementsAfterScreenshot(page) {
+    await page.evaluate(() => {
+        const hidden = window
+            .__pwScreenshotHidden;
+        if (!hidden) {
+            return;
+        }
+        for (const [element, state] of hidden.entries()) {
+            const htmlElement = element;
+            htmlElement.style.visibility = state.visibility;
+            htmlElement.style.opacity = state.opacity;
+            htmlElement.style.pointerEvents = state.pointerEvents;
+            if (Object.prototype.hasOwnProperty.call(state, "display")) {
+                htmlElement.style.display = state.display;
+            }
+        }
+        delete window
+            .__pwScreenshotHidden;
+    });
+}`
+
+  if (!source.includes(originalFn)) {
+    console.warn('audit-kit hide-elements patch skipped: expected function not found')
+    return
+  }
+
+  await writeFile(pageHelpersPath, source.replace(originalFn, patchedFn))
+  console.log('Applied audit-kit hide-elements ancestor patch')
+}
+
 try {
   await patchAdaSpec()
   await patchPlaywrightConfig()
+  await patchHideElementsForScreenshot()
 } catch (error) {
   console.warn(`audit-kit patch skipped: ${error instanceof Error ? error.message : String(error)}`)
 }
