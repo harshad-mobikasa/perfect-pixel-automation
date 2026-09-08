@@ -78,7 +78,25 @@ function cloneValue(value) {
 }
 
 function createPage() {
-  return { id: makeId(), name: 'Home Page', url: '/', components: [] }
+  return {
+    id: makeId(),
+    name: 'Home Page',
+    url: '/',
+    components: [],
+    hideSelectors: '',
+    hideFixed: false,
+  }
+}
+
+function parseHideSelectors(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    return []
+  }
+
+  return text
+    .split(/[\n,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
 }
 
 function createComponent() {
@@ -445,30 +463,43 @@ export default function Home() {
 
     const formData = new FormData()
 
-    const normalizedPages = pages.map((page) => ({
-      name: page.name.trim(),
-      url: normalizePageUrl(page.url),
-      components: page.components.map((component) => {
-        const normalizedComponent = {
-          name: component.name.trim(),
-          selector: component.selector.trim(),
-        }
+    const normalizedPages = pages.map((page) => {
+      const hideSelectors = parseHideSelectors(page.hideSelectors)
+      const normalizedPage = {
+        name: page.name.trim(),
+        url: normalizePageUrl(page.url),
+        components: page.components.map((component) => {
+          const normalizedComponent = {
+            name: component.name.trim(),
+            selector: component.selector.trim(),
+          }
 
-        if (component.desktopFile) {
-          const desktopKey = `desktop:${page.id}:${component.id}`
-          formData.append(desktopKey, component.desktopFile)
-          normalizedComponent.referenceImageDesktopKey = desktopKey
-        }
+          if (component.desktopFile) {
+            const desktopKey = `desktop:${page.id}:${component.id}`
+            formData.append(desktopKey, component.desktopFile)
+            normalizedComponent.referenceImageDesktopKey = desktopKey
+          }
 
-        if (component.mobileFile) {
-          const mobileKey = `mobile:${page.id}:${component.id}`
-          formData.append(mobileKey, component.mobileFile)
-          normalizedComponent.referenceImageMobileKey = mobileKey
-        }
+          if (component.mobileFile) {
+            const mobileKey = `mobile:${page.id}:${component.id}`
+            formData.append(mobileKey, component.mobileFile)
+            normalizedComponent.referenceImageMobileKey = mobileKey
+          }
 
-        return normalizedComponent
-      }),
-    }))
+          return normalizedComponent
+        }),
+      }
+
+      if (isPixelmatch && hideSelectors.length > 0) {
+        normalizedPage.hideSelectors = hideSelectors
+      }
+
+      if (isPixelmatch && page.hideFixed) {
+        normalizedPage.hideFixed = true
+      }
+
+      return normalizedPage
+    })
 
     definition.pages = normalizedPages
     formData.append('definition', JSON.stringify(definition))
@@ -640,7 +671,7 @@ export default function Home() {
           <button
             onClick={clearAll}
             disabled={isRunning}
-            className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-200 disabled:opacity-50"
+            className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-200 disabled:opacity-50 cursor-pointer"
           >
             Clear and start new
           </button>
@@ -714,7 +745,7 @@ export default function Home() {
                       type="button"
                       disabled={isRunning}
                       onClick={() => setActiveSuite(suite.id)}
-                      className={`rounded-xl border p-4 text-left transition ${
+                      className={`rounded-xl border p-4 text-left transition cursor-pointer ${
                         activeSuite === suite.id
                           ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
                           : 'border-zinc-200 bg-zinc-50 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-800'
@@ -744,7 +775,7 @@ export default function Home() {
                     type="button"
                     onClick={addPage}
                     disabled={isRunning}
-                    className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
+                    className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                   >
                     Add page
                   </button>
@@ -764,7 +795,7 @@ export default function Home() {
                           type="button"
                           onClick={() => removePage(page.id)}
                           disabled={isRunning || pages.length === 1}
-                          className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400"
+                          className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400 cursor-pointer"
                         >
                           Remove
                         </button>
@@ -812,6 +843,7 @@ export default function Home() {
                   </h2>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
                     For each page, add the sections to compare and upload both desktop and mobile baseline PNGs.
+                    Optionally hide popups or overlays before each screenshot.
                   </p>
                 </div>
 
@@ -829,11 +861,47 @@ export default function Home() {
                           type="button"
                           onClick={() => addComponent(page.id)}
                           disabled={isRunning}
-                          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
+                          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                         >
                           Add component
                         </button>
                       </div>
+
+                      <label className="mb-4 block space-y-1">
+                        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                          Hide before screenshot (optional)
+                        </span>
+                        <textarea
+                          value={page.hideSelectors}
+                          onChange={(e) => updatePage(page.id, 'hideSelectors', e.target.value)}
+                          disabled={isRunning}
+                          rows={3}
+                          placeholder={"id:newsletter-popup\nclass:cookie-banner\ntestid:promo-modal\ncss:.overlay"}
+                          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
+                        />
+                        <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                          One selector per line (or comma-separated). Supports id:, class:, testid:, css:, or raw CSS.
+                          Matching elements and their fixed/sticky popup wrappers are hidden before the pixel comparison.
+                        </span>
+                      </label>
+
+                      <label className="mb-4 flex items-start gap-3 rounded-lg border border-zinc-200 px-3 py-3 dark:border-zinc-800">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(page.hideFixed)}
+                          onChange={(e) => updatePage(page.id, 'hideFixed', e.target.checked)}
+                          disabled={isRunning}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                            Hide all fixed overlays
+                          </span>
+                          <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                            Useful for newsletter modals and dimmed backdrops that sit above the page (`position: fixed`).
+                          </span>
+                        </span>
+                      </label>
 
                       <div className="space-y-4">
                         {page.components.length === 0 && (
@@ -855,7 +923,7 @@ export default function Home() {
                                 type="button"
                                 onClick={() => removeComponent(page.id, component.id)}
                                 disabled={isRunning}
-                                className="text-xs text-red-600 dark:text-red-400"
+                                className="text-xs text-red-600 dark:text-red-400 cursor-pointer"
                               >
                                 Remove
                               </button>
@@ -950,7 +1018,7 @@ export default function Home() {
                       type="button"
                       onClick={resetTypographyTemplate}
                       disabled={isRunning}
-                      className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
+                      className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                     >
                       Reset template
                     </button>
@@ -981,7 +1049,7 @@ export default function Home() {
                           type="button"
                           onClick={() => addTypographyBlock(option.name)}
                           disabled={isRunning}
-                          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
+                          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                         >
                           Add {option.label}
                         </button>
@@ -1019,7 +1087,7 @@ export default function Home() {
                             type="button"
                             onClick={() => removeTypographyBlock(block.id)}
                             disabled={isRunning || typographyBlocks.length === 1}
-                            className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400"
+                            className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400 cursor-pointer"
                           >
                             Remove
                           </button>
@@ -1072,7 +1140,10 @@ export default function Home() {
                     Pages
                   </div>
                   <div className="space-y-3">
-                    {pages.map((page) => (
+                    {pages.map((page) => {
+                      const pageHideSelectors = isPixelmatch ? parseHideSelectors(page.hideSelectors) : []
+
+                      return (
                       <div key={page.id} className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-950">
                         <div className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
                           {page.name || 'Untitled page'}
@@ -1083,10 +1154,27 @@ export default function Home() {
                         {isPixelmatch && (
                           <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
                             {page.components.length} component{page.components.length === 1 ? '' : 's'}
+                            {pageHideSelectors.length > 0
+                              ? ` · ${pageHideSelectors.length} hide selector${pageHideSelectors.length === 1 ? '' : 's'}`
+                              : ''}
+                            {page.hideFixed ? ' · hide fixed overlays' : ''}
+                          </div>
+                        )}
+                        {pageHideSelectors.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {pageHideSelectors.map((selector) => (
+                              <span
+                                key={selector}
+                                className="rounded bg-zinc-200 px-2 py-0.5 font-mono text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                              >
+                                {selector}
+                              </span>
+                            ))}
                           </div>
                         )}
                       </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
 
@@ -1170,7 +1258,7 @@ export default function Home() {
                           <button
                             key={file.fileName}
                             onClick={() => downloadPdf(file.fileName)}
-                            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer"
                           >
                             Download {file.fileName}
                           </button>
@@ -1178,14 +1266,14 @@ export default function Home() {
                       ) : (
                         <button
                           onClick={() => downloadPdf()}
-                          className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
+                          className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer"
                         >
                           Download PDF report
                         </button>
                       )}
                       <button
                         onClick={clearAll}
-                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700"
+                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                       >
                         Clear and start new
                       </button>
@@ -1202,13 +1290,13 @@ export default function Home() {
                     <div className="flex flex-wrap gap-3">
                       <button
                         onClick={resetForEditing}
-                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700"
+                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                       >
                         Back to setup
                       </button>
                       <button
                         onClick={clearAll}
-                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700"
+                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                       >
                         Clear and start new
                       </button>
@@ -1223,7 +1311,7 @@ export default function Home() {
                 type="button"
                 onClick={goBack}
                 disabled={stepIndex === 0 || isRunning}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium disabled:opacity-40 dark:border-zinc-700"
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium disabled:opacity-40 dark:border-zinc-700 cursor-pointer"
               >
                 Back
               </button>
@@ -1233,7 +1321,7 @@ export default function Home() {
                   type="button"
                   onClick={startAudit}
                   disabled={isRunning || stepErrors.length > 0}
-                  className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+                  className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer"
                 >
                   Start audit
                 </button>
@@ -1242,7 +1330,7 @@ export default function Home() {
                   type="button"
                   onClick={goNext}
                   disabled={isRunning || !canGoNext()}
-                  className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+                  className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer"
                 >
                   Continue
                 </button>
@@ -1280,6 +1368,10 @@ export default function Home() {
               <ul className="mt-3 space-y-2">
                 <li>Use relative page paths like `/`, `/collections`, or `/product/example`.</li>
                 <li>For Perfect Pixel, upload PNG baselines for both desktop and mobile.</li>
+                <li>
+                  Hide popups with selectors like `class:step-one-form` or `class:newsletter-popup`. Fixed modal
+                  backdrops are hidden automatically with the matched element. Use “Hide all fixed overlays” if needed.
+                </li>
                 <li>Selectors can be CSS selectors or data-testid shortcuts supported by the audit kit.</li>
                 <li>Typography blocks are temporary for this run unless you copy them elsewhere later.</li>
               </ul>
