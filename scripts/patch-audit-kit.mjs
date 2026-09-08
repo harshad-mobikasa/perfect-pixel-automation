@@ -28,6 +28,16 @@ const pageHelpersPath = join(
   'utils',
   'page-helpers.js',
 )
+const pixelmatchSpecPath = join(
+  process.cwd(),
+  'node_modules',
+  '@sahilmobikasa',
+  'storefront-audit-kit',
+  'dist',
+  'tests',
+  'pixelmatch',
+  'pixelmatch.spec.js',
+)
 
 const originalSnippet = 'await page.goto(pageTargetUrl, { waitUntil: "load" });'
 const brokenPatchedSnippet =
@@ -37,6 +47,21 @@ const patchedSnippet =
 const originalWorkersSnippet = 'workers: process.env.CI ? 1 : undefined,'
 const patchedWorkersSnippet =
   'workers: process.env.PLAYWRIGHT_WORKERS ? Number.parseInt(process.env.PLAYWRIGHT_WORKERS, 10) || 1 : process.env.CI ? 1 : undefined,'
+const originalDeviceBucketSnippet =
+  'function getDeviceBucket(projectName) {\n    return projectName.toLowerCase().includes("mobile") ? "mobile" : "desktop";\n}'
+const patchedDeviceBucketSnippet = `function getDeviceBucket(projectName) {
+    const normalized = projectName.toLowerCase();
+    return normalized.includes("mobile") ||
+        normalized.includes("iphone") ||
+        normalized.includes("android") ||
+        normalized.includes("pixel") ||
+        normalized.includes("galaxy")
+        ? "mobile"
+        : "desktop";
+}`
+const originalPixelmatchScreenshotSnippet = 'await section.screenshot({ path: actualImagePath });'
+const patchedPixelmatchScreenshotSnippet =
+  'await section.screenshot({ path: actualImagePath, scale: "css" });'
 
 async function patchAdaSpec() {
   const source = await readFile(adaSpecPath, 'utf8')
@@ -238,10 +263,52 @@ async function restoreElementsAfterScreenshot(page) {
   console.log('Applied audit-kit hide-elements ancestor patch')
 }
 
+async function patchDeviceBucketDetection() {
+  const source = await readFile(pageHelpersPath, 'utf8')
+
+  if (source.includes(patchedDeviceBucketSnippet)) {
+    console.log('audit-kit device-bucket patch already applied')
+    return
+  }
+
+  if (!source.includes(originalDeviceBucketSnippet)) {
+    console.warn('audit-kit device-bucket patch skipped: expected function not found')
+    return
+  }
+
+  await writeFile(
+    pageHelpersPath,
+    source.replace(originalDeviceBucketSnippet, patchedDeviceBucketSnippet),
+  )
+  console.log('Applied audit-kit device-bucket patch')
+}
+
+async function patchPixelmatchScreenshotScale() {
+  const source = await readFile(pixelmatchSpecPath, 'utf8')
+
+  if (source.includes(patchedPixelmatchScreenshotSnippet)) {
+    console.log('audit-kit pixelmatch screenshot-scale patch already applied')
+    return
+  }
+
+  if (!source.includes(originalPixelmatchScreenshotSnippet)) {
+    console.warn('audit-kit pixelmatch screenshot-scale patch skipped: expected snippet not found')
+    return
+  }
+
+  await writeFile(
+    pixelmatchSpecPath,
+    source.replace(originalPixelmatchScreenshotSnippet, patchedPixelmatchScreenshotSnippet),
+  )
+  console.log('Applied audit-kit pixelmatch screenshot-scale patch')
+}
+
 try {
   await patchAdaSpec()
   await patchPlaywrightConfig()
   await patchHideElementsForScreenshot()
+  await patchDeviceBucketDetection()
+  await patchPixelmatchScreenshotScale()
 } catch (error) {
   console.warn(`audit-kit patch skipped: ${error instanceof Error ? error.message : String(error)}`)
 }
