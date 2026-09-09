@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { jobMap, rateLimitMap } from '../../../lib/job-store.js'
+import { getJobStore, rateLimitMap } from '../../../lib/job-store.js'
 import { enqueueAudit, getActiveJobCount } from '../../../lib/audit-runner.js'
 import { parseAuditFormData } from '../../../lib/audit-request.js'
+import { getFileStore } from '../../../lib/shopify-file-store.js'
+import { isShopifyFilesConfigured, shouldProcessAuditsInCurrentProcess } from '../../../lib/runtime-config.js'
 import { validateAuditRequest } from '../../../lib/ssrf-guard.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 const RATE_LIMIT = 5
 const RATE_WINDOW_MS = 10 * 60 * 1000
@@ -51,12 +54,15 @@ export async function POST(request) {
     return Response.json({ error: err.message }, { status: 429 })
   }
 
-  if (getActiveJobCount() >= QUEUE_CAP) {
+  const jobStore = getJobStore()
+  const fileStore = getFileStore()
+
+  if ((await getActiveJobCount(jobStore)) >= QUEUE_CAP) {
     return Response.json({ error: 'Server is busy — try again later' }, { status: 503 })
   }
 
   const jobId = randomUUID()
-  jobMap.set(jobId, {
+  const initialJob = {
     status: 'queued',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -70,9 +76,52 @@ export async function POST(request) {
     progress: 5,
     lastMessage: 'Waiting for an available audit slot',
     error: null,
-  })
+  }
 
-  enqueueAudit(jobId, auditRequest)
+  await jobStore.createJob(jobId, initialJob)
 
-  return Response.json({ jobId }, { status: 202 })
+  let normalizedRequest
+  try {
+    normalizedRequest = isShopifyFilesConfigured()
+      ? await fileStore.persistAuditRequestAssets(jobId, auditRequest)
+      : auditRequest
+  } catch (err) {
+    await jobStore.deleteJob(jobId)
+    return Response.json(
+      { error: err instanceof Error ? err.message : 'Failed to store audit files in Shopify' },
+      { status: 500 },
+    )
+  }
+
+  const processHere = shouldProcessAuditsInCurrentProcess()
+
+  try {
+    if (processHere) {
+      await jobStore.attachRequest(jobId, normalizedRequest)
+    } else {
+      await jobStore.enqueueJob(jobId, normalizedRequest)
+    }
+  } catch (err) {
+    await jobStore.deleteJob(jobId)
+    return Response.json(
+      { error: err instanceof Error ? err.message : 'Failed to enqueue audit job' },
+      { status: 500 },
+    )
+  }
+
+  if (processHere) {
+    enqueueAudit(jobId, normalizedRequest, {
+      jobStore,
+      fileStore,
+      persistReports: isShopifyFilesConfigured(),
+    })
+  }
+
+  return Response.json(
+    {
+      jobId,
+      mode: processHere ? 'local' : 'shared-worker',
+    },
+    { status: 202 },
+  )
 }

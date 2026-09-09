@@ -35,6 +35,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # audit-kit local assets and generated baselines
 /configs/project-data/reference-images/*

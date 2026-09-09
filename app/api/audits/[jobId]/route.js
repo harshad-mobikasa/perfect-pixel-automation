@@ -1,25 +1,12 @@
-import { jobMap } from '../../../../lib/job-store.js'
+import { getJobStore } from '../../../../lib/job-store.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function getQueuePosition(jobId) {
-  let position = 0
-
-  for (const [id, job] of jobMap.entries()) {
-    if (job.status !== 'queued') continue
-    position += 1
-    if (id === jobId) {
-      return position
-    }
-  }
-
-  return null
-}
-
-export async function GET(request, { params }) {
+export async function GET(_request, { params }) {
   const { jobId } = await params
-  const job = jobMap.get(jobId)
+  const jobStore = getJobStore()
+  const job = await jobStore.getJob(jobId)
 
   if (!job) {
     return Response.json({ error: 'Job not found' }, { status: 404 })
@@ -31,7 +18,7 @@ export async function GET(request, { params }) {
     stage: job.stage ?? null,
     progress: job.progress ?? null,
     lastMessage: job.lastMessage ?? null,
-    queuePosition: job.status === 'queued' ? getQueuePosition(jobId) : null,
+    queuePosition: job.status === 'queued' ? await jobStore.getQueuePosition(jobId) : null,
     reportFiles:
       job.status === 'done'
         ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName }))

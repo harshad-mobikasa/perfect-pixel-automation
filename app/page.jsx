@@ -50,6 +50,11 @@ const STEP_META = {
   review: 'Review & Run',
 }
 
+const DEFAULT_VIEWPORTS = {
+  desktop: { width: '1440', height: '956' },
+  mobile: { width: '390', height: '844' },
+}
+
 const TYPOGRAPHY_BLOCK_OPTIONS = [
   { name: 'HEADINGS', label: 'Headings', matches: 'h1 to h6' },
   { name: 'PARAGRAPH', label: 'Paragraph', matches: 'p' },
@@ -110,6 +115,13 @@ function createTypographyBlocks() {
     name: option.name,
     value: cloneValue(template[option.name]),
   }))
+}
+
+function createViewportConfig() {
+  return {
+    desktop: { ...DEFAULT_VIEWPORTS.desktop },
+    mobile: { ...DEFAULT_VIEWPORTS.mobile },
+  }
 }
 
 function isPublicHttpUrl(value) {
@@ -181,6 +193,7 @@ export default function Home() {
   const [url, setUrl] = useState('')
   const [activeSuite, setActiveSuite] = useState(null)
   const [pages, setPages] = useState([createPage()])
+  const [viewportConfig, setViewportConfig] = useState(createViewportConfig)
   const [typographyBlocks, setTypographyBlocks] = useState(createTypographyBlocks)
   const [stepIndex, setStepIndex] = useState(0)
   const [jobId, setJobId] = useState(null)
@@ -200,34 +213,35 @@ export default function Home() {
   const typographyBlockRefs = useRef({})
 
   const isPixelmatch = activeSuite === 'pixelmatch'
+  const isResponsive = activeSuite === 'responsive'
   const isTypography = activeSuite === 'typography'
   const isRunning = status === 'queued' || status === 'running'
   const estSec = SUITES.find((suite) => suite.id === activeSuite)?.estSec ?? 120
   const remaining = Math.max(0, estSec - elapsed)
   const fallbackPct = Math.min(95, Math.round((elapsed / estSec) * 100))
   const pct = jobProgress ?? fallbackPct
-  const steps = ['url', 'suite', 'pages', ...(isPixelmatch || isTypography ? ['config'] : []), 'review']
-  const currentStep = steps[stepIndex] ?? 'url'
+  const steps = ['url', 'suite', 'pages', ...(isPixelmatch || isResponsive || isTypography ? ['config'] : []), 'review']
+  const effectiveStepIndex = Math.min(stepIndex, steps.length - 1)
+  const currentStep = steps[effectiveStepIndex] ?? 'url'
   const missingTypographyBlocks = TYPOGRAPHY_BLOCK_OPTIONS.filter(
     (option) => !typographyBlocks.some((block) => block.name === option.name),
   )
 
   useEffect(() => {
-    setStepIndex((current) => Math.min(current, steps.length - 1))
-  }, [steps.length])
-
-  useEffect(() => {
     if (!pendingTypographyBlockId) return
 
     const node = typographyBlockRefs.current[pendingTypographyBlockId]
+    const clearPendingTimer = setTimeout(() => setPendingTypographyBlockId(null), 0)
     if (node) {
       node.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setHighlightedTypographyBlockId(pendingTypographyBlockId)
     }
 
-    setPendingTypographyBlockId(null)
     const timer = setTimeout(() => setHighlightedTypographyBlockId(null), 1800)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(clearPendingTimer)
+      clearTimeout(timer)
+    }
   }, [pendingTypographyBlockId, typographyBlocks])
 
   function stopTimers() {
@@ -256,6 +270,7 @@ export default function Home() {
     setUrl('')
     setActiveSuite(null)
     setPages([createPage()])
+    setViewportConfig(createViewportConfig())
     setTypographyBlocks(createTypographyBlocks())
     setHighlightedTypographyBlockId(null)
     setPendingTypographyBlockId(null)
@@ -358,6 +373,59 @@ export default function Home() {
     setTypographyBlocks(createTypographyBlocks())
   }
 
+  function updateViewport(device, field, value) {
+    setViewportConfig((current) => ({
+      ...current,
+      [device]: {
+        ...current[device],
+        [field]: value,
+      },
+    }))
+  }
+
+  function resetViewportDefaults() {
+    setViewportConfig(createViewportConfig())
+  }
+
+  function normalizeViewportNumber(value, label) {
+    const parsed = Number.parseInt(String(value).trim(), 10)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`${label} must be a positive number`)
+    }
+    return parsed
+  }
+
+  function buildViewportDefinition() {
+    return {
+      desktop: {
+        width: normalizeViewportNumber(viewportConfig.desktop.width, 'Desktop width'),
+        height: normalizeViewportNumber(viewportConfig.desktop.height, 'Desktop height'),
+      },
+      mobile: {
+        width: normalizeViewportNumber(viewportConfig.mobile.width, 'Mobile width'),
+        height: normalizeViewportNumber(viewportConfig.mobile.height, 'Mobile height'),
+      },
+    }
+  }
+
+  function getViewportValidationErrors() {
+    if (!isPixelmatch && !isResponsive) {
+      return []
+    }
+
+    const labels = [
+      ['desktop', 'width', 'Desktop width'],
+      ['desktop', 'height', 'Desktop height'],
+      ['mobile', 'width', 'Mobile width'],
+      ['mobile', 'height', 'Mobile height'],
+    ]
+
+    return labels.flatMap(([device, field, label]) => {
+      const parsed = Number.parseInt(String(viewportConfig[device][field]).trim(), 10)
+      return Number.isFinite(parsed) && parsed > 0 ? [] : [`${label} must be a positive number.`]
+    })
+  }
+
   function getPageValidationErrors() {
     if (pages.length === 0) {
       return ['Add at least one page.']
@@ -426,7 +494,11 @@ export default function Home() {
     }
 
     if (currentStep === 'config' && isPixelmatch) {
-      return getPixelmatchValidationErrors()
+      return [...getViewportValidationErrors(), ...getPixelmatchValidationErrors()]
+    }
+
+    if (currentStep === 'config' && isResponsive) {
+      return getViewportValidationErrors()
     }
 
     if (currentStep === 'config' && isTypography) {
@@ -437,6 +509,7 @@ export default function Home() {
       ...(isPublicHttpUrl(url.trim()) ? [] : ['Enter a valid public http or https URL.']),
       ...(activeSuite ? [] : ['Choose an audit type.']),
       ...getPageValidationErrors(),
+      ...((isPixelmatch || isResponsive) ? getViewportValidationErrors() : []),
       ...(isPixelmatch ? getPixelmatchValidationErrors() : []),
       ...(isTypography ? getTypographyValidationErrors() : []),
     ]
@@ -459,6 +532,10 @@ export default function Home() {
       suite: activeSuite,
       pages: [],
       typography: parsedTypography.value,
+    }
+
+    if (isPixelmatch || isResponsive) {
+      definition.viewport = buildViewportDefinition()
     }
 
     const formData = new FormData()
@@ -589,7 +666,7 @@ export default function Home() {
 
   function downloadPdf(fileName) {
     const suffix = fileName ? `?file=${encodeURIComponent(fileName)}` : ''
-    window.location.href = `/api/audits/${jobId}/download${suffix}`
+    window.open(`/api/audits/${jobId}/download${suffix}`, '_self')
   }
 
   function goNext() {
@@ -602,6 +679,67 @@ export default function Home() {
   }
 
   const stepErrors = getCurrentStepErrors()
+
+  function renderViewportSettings(title, description, note) {
+    return (
+      <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{title}</h3>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{description}</p>
+          </div>
+          <button
+            type="button"
+            onClick={resetViewportDefaults}
+            disabled={isRunning}
+            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
+          >
+            Reset sizes
+          </button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {[
+            ['desktop', 'Desktop viewport'],
+            ['mobile', 'Mobile viewport'],
+          ].map(([device, label]) => (
+            <div key={device} className="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-950">
+              <div className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-100">{label}</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Width</span>
+                  <input
+                    type="number"
+                    min="1"
+                    inputMode="numeric"
+                    value={viewportConfig[device].width}
+                    onChange={(event) => updateViewport(device, 'width', event.target.value)}
+                    disabled={isRunning}
+                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Height</span>
+                  <input
+                    type="number"
+                    min="1"
+                    inputMode="numeric"
+                    value={viewportConfig[device].height}
+                    onChange={(event) => updateViewport(device, 'height', event.target.value)}
+                    disabled={isRunning}
+                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{note}</p>
+      </div>
+    )
+  }
 
   function renderTypographyFields(blockId, value, path = [], depth = 0) {
     const entries = Object.entries(value)
@@ -847,6 +985,12 @@ export default function Home() {
                   </p>
                 </div>
 
+                {renderViewportSettings(
+                  'Screen sizes',
+                  'The audit will capture desktop and mobile screenshots using these viewport sizes.',
+                  'Keep these sizes matched with the baseline PNGs you upload so the comparison stays accurate.',
+                )}
+
                 <div className="space-y-4">
                   {pages.map((page) => (
                     <div key={page.id} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
@@ -999,6 +1143,25 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {currentStep === 'config' && isResponsive && (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                    Set up Responsive
+                  </h2>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Choose the desktop and mobile screen sizes to capture for this run.
+                  </p>
+                </div>
+
+                {renderViewportSettings(
+                  'Screen sizes',
+                  'Responsive will generate full-page screenshots for the desktop and mobile viewports below.',
+                  'Defaults are prefilled, but you can change them any time before starting the audit.',
+                )}
               </div>
             )}
 
@@ -1196,6 +1359,28 @@ export default function Home() {
                     </div>
                     <div className="mt-2 text-sm text-zinc-900 dark:text-zinc-50">
                       {pages.reduce((count, page) => count + page.components.length, 0)} component baseline set{pages.reduce((count, page) => count + page.components.length, 0) === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                )}
+
+                {(isPixelmatch || isResponsive) && (
+                  <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+                    <div className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Screen sizes
+                    </div>
+                    <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-950">
+                        <div className="font-medium text-zinc-900 dark:text-zinc-50">Desktop</div>
+                        <div className="mt-1 text-zinc-600 dark:text-zinc-300">
+                          {viewportConfig.desktop.width} x {viewportConfig.desktop.height}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-950">
+                        <div className="font-medium text-zinc-900 dark:text-zinc-50">Mobile</div>
+                        <div className="mt-1 text-zinc-600 dark:text-zinc-300">
+                          {viewportConfig.mobile.width} x {viewportConfig.mobile.height}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
