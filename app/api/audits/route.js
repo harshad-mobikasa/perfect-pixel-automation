@@ -94,6 +94,11 @@ export async function POST(request) {
     error: null,
     userId: auth.user.id,
     projectId,
+    createdBy: {
+      userId: auth.user.id,
+      name: auth.user.name,
+      email: auth.user.email,
+    },
   }
 
   await jobStore.createJob(jobId, initialJob)

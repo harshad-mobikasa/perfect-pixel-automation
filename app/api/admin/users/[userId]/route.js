@@ -1,11 +1,11 @@
 import { removeUser, updateUser } from '../../../../../lib/account-store.js'
-import { jsonError, requireAdmin } from '../../../../../lib/require-auth.js'
+import { jsonError, requireUserManager } from '../../../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function PATCH(request, { params }) {
-  const auth = await requireAdmin()
+  const auth = await requireUserManager()
   if (auth.error) return auth.error
 
   const { userId } = await params
@@ -30,12 +30,12 @@ export async function PATCH(request, { params }) {
 
     return Response.json({ user })
   } catch (error) {
-    return jsonError(error, error.message?.includes('Only admins') ? 403 : 400)
+    return jsonError(error, error.message?.includes('Only admins') || error.message?.includes('cannot') ? 403 : 400)
   }
 }
 
 export async function DELETE(_request, { params }) {
-  const auth = await requireAdmin()
+  const auth = await requireUserManager()
   if (auth.error) return auth.error
 
   const { userId } = await params

@@ -1,9 +1,11 @@
 import { getJobStore } from '../lib/job-store.js'
 import { getFileStore } from '../lib/shopify-file-store.js'
 import { runAudit } from '../lib/audit-runner.js'
+import { cleanupExpiredReports } from '../lib/report-store.js'
 import { isSharedInfrastructureConfigured } from '../lib/runtime-config.js'
 
 const POLL_INTERVAL_MS = 3000
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -21,8 +23,16 @@ async function main() {
   const fileStore = getFileStore()
 
   console.log('Audit worker started')
+  let lastCleanupAt = 0
 
   while (true) {
+    if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
+      lastCleanupAt = Date.now()
+      await cleanupExpiredReports().catch((error) => {
+        console.error('Report cleanup failed', error)
+      })
+    }
+
     const nextJob = await jobStore.dequeueJob()
     if (!nextJob) {
       await sleep(POLL_INTERVAL_MS)

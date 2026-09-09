@@ -4,7 +4,11 @@ import { COOKIE_NAME, readSessionToken } from './lib/session.js'
 function isPublicPath(pathname) {
   return (
     pathname === '/login' ||
+    pathname === '/forgot-password' ||
+    pathname === '/reset-password' ||
     pathname === '/api/auth/login' ||
+    pathname === '/api/auth/forgot-password' ||
+    pathname === '/api/auth/reset-password' ||
     pathname === '/icon' ||
     pathname === '/favicon.ico' ||
     pathname === '/mobikasa.png'

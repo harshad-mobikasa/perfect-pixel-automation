@@ -36,6 +36,7 @@ export async function PATCH(request, { params }) {
       name: body?.name,
       memberIds: body?.memberIds,
       config: body?.config,
+      retentionDays: body?.retentionDays,
     })
 
     if (!project) {

@@ -1,7 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import defaultTypographyTemplate from '../configs/playwright.typography.json'
+import {
+  TypographyEditor,
+  buildTypographyObject,
+  hydrateTypography,
+  serializeTypographyBlocks,
+} from './typography-editor.jsx'
 
 const SUITES = [
   {
@@ -55,13 +60,6 @@ const DEFAULT_VIEWPORTS = {
   mobile: { width: '390', height: '844' },
 }
 
-const TYPOGRAPHY_BLOCK_OPTIONS = [
-  { name: 'HEADINGS', label: 'Headings', matches: 'h1 to h6' },
-  { name: 'PARAGRAPH', label: 'Paragraph', matches: 'p' },
-  { name: 'ANCHOR', label: 'Anchor', matches: 'a' },
-  { name: 'BUTTON', label: 'Button', matches: 'button' },
-]
-
 function makeId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -72,14 +70,6 @@ function fmtTime(sec) {
   const s = sec % 60
   if (m === 0) return `~${s}s`
   return s === 0 ? `~${m} min` : `~${m}m ${s}s`
-}
-
-function cloneTypographyTemplate() {
-  return JSON.parse(JSON.stringify(defaultTypographyTemplate))
-}
-
-function cloneValue(value) {
-  return JSON.parse(JSON.stringify(value))
 }
 
 function createPage() {
@@ -108,15 +98,6 @@ function createComponent() {
   return { id: makeId(), name: '', selector: '', desktopFile: null, mobileFile: null }
 }
 
-function createTypographyBlocks() {
-  const template = cloneTypographyTemplate()
-  return TYPOGRAPHY_BLOCK_OPTIONS.filter((option) => template[option.name]).map((option) => ({
-    id: makeId(),
-    name: option.name,
-    value: cloneValue(template[option.name]),
-  }))
-}
-
 function createViewportConfig() {
   return {
     desktop: { ...DEFAULT_VIEWPORTS.desktop },
@@ -142,53 +123,6 @@ function normalizePageUrl(value) {
   return `/${trimmed}`
 }
 
-function setNestedValue(target, path, nextValue) {
-  if (path.length === 0) {
-    return nextValue
-  }
-
-  const [head, ...rest] = path
-  return {
-    ...target,
-    [head]: setNestedValue(target[head], rest, nextValue),
-  }
-}
-
-function buildTypographyObject(blocks) {
-  const result = {}
-
-  for (const block of blocks) {
-    const blockName = block.name.trim()
-    if (!blockName) {
-      return { error: 'Each typography block needs a name.' }
-    }
-
-    if (result[blockName]) {
-      return { error: `Typography block "${blockName}" is duplicated.` }
-    }
-
-    result[blockName] = cloneValue(block.value)
-  }
-
-  return { value: result }
-}
-
-function formatFieldLabel(value) {
-  return value
-    .replace(/_/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .toLowerCase()
-    .replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
-function getTypographyBlockMeta(name) {
-  return TYPOGRAPHY_BLOCK_OPTIONS.find((option) => option.name === name) ?? {
-    name,
-    label: formatFieldLabel(name),
-    matches: 'custom tag mapping',
-  }
-}
-
 function hydratePages(rawPages) {
   if (!Array.isArray(rawPages) || rawPages.length === 0) {
     return [createPage()]
@@ -209,18 +143,6 @@ function hydratePages(rawPages) {
           mobileFile: null,
         }))
       : [],
-  }))
-}
-
-function hydrateTypography(rawBlocks) {
-  if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) {
-    return createTypographyBlocks()
-  }
-
-  return rawBlocks.map((block) => ({
-    id: makeId(),
-    name: block.name,
-    value: cloneValue(block.value ?? {}),
   }))
 }
 
@@ -255,12 +177,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const [jobLastMessage, setJobLastMessage] = useState(null)
   const [queuePosition, setQueuePosition] = useState(null)
   const [reportFiles, setReportFiles] = useState([])
-  const [highlightedTypographyBlockId, setHighlightedTypographyBlockId] = useState(null)
-  const [pendingTypographyBlockId, setPendingTypographyBlockId] = useState(null)
   const startRef = useRef(null)
   const pollRef = useRef(null)
   const tickRef = useRef(null)
-  const typographyBlockRefs = useRef({})
 
   const isPixelmatch = activeSuite === 'pixelmatch'
   const isResponsive = activeSuite === 'responsive'
@@ -273,26 +192,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const steps = ['url', 'suite', 'pages', ...(isPixelmatch || isResponsive || isTypography ? ['config'] : []), 'review']
   const effectiveStepIndex = Math.min(stepIndex, steps.length - 1)
   const currentStep = steps[effectiveStepIndex] ?? 'url'
-  const missingTypographyBlocks = TYPOGRAPHY_BLOCK_OPTIONS.filter(
-    (option) => !typographyBlocks.some((block) => block.name === option.name),
-  )
-
-  useEffect(() => {
-    if (!pendingTypographyBlockId) return
-
-    const node = typographyBlockRefs.current[pendingTypographyBlockId]
-    const clearPendingTimer = setTimeout(() => setPendingTypographyBlockId(null), 0)
-    if (node) {
-      node.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      setHighlightedTypographyBlockId(pendingTypographyBlockId)
-    }
-
-    const timer = setTimeout(() => setHighlightedTypographyBlockId(null), 1800)
-    return () => {
-      clearTimeout(clearPendingTimer)
-      clearTimeout(timer)
-    }
-  }, [pendingTypographyBlockId, typographyBlocks])
 
   function stopTimers() {
     clearInterval(pollRef.current)
@@ -321,8 +220,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setPages(hydratePages(config?.pages))
     setViewportConfig(hydrateViewport(config?.viewportConfig))
     setTypographyBlocks(hydrateTypography(config?.typographyBlocks))
-    setHighlightedTypographyBlockId(null)
-    setPendingTypographyBlockId(null)
     setStepIndex(0)
     setSaveState(null)
   }
@@ -346,10 +243,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
         })),
       })),
       viewportConfig,
-      typographyBlocks: typographyBlocks.map((block) => ({
-        name: block.name,
-        value: cloneValue(block.value),
-      })),
+      typographyBlocks: serializeTypographyBlocks(typographyBlocks),
     }
   }
 
@@ -418,47 +312,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
             },
       ),
     )
-  }
-
-  function addTypographyBlock(blockName) {
-    const template = cloneTypographyTemplate()
-    if (!template[blockName]) return
-
-    const newBlock = {
-      id: makeId(),
-      name: blockName,
-      value: cloneValue(template[blockName]),
-    }
-
-    setTypographyBlocks((current) => {
-      if (current.some((block) => block.name === blockName)) {
-        return current
-      }
-
-      return [...current, newBlock]
-    })
-    setPendingTypographyBlockId(newBlock.id)
-  }
-
-  function updateTypographyBlockValue(blockId, path, value) {
-    setTypographyBlocks((current) =>
-      current.map((block) =>
-        block.id !== blockId
-          ? block
-          : {
-              ...block,
-              value: setNestedValue(block.value, path, value),
-            },
-      ),
-    )
-  }
-
-  function removeTypographyBlock(blockId) {
-    setTypographyBlocks((current) => (current.length === 1 ? current : current.filter((block) => block.id !== blockId)))
-  }
-
-  function resetTypographyTemplate() {
-    setTypographyBlocks(createTypographyBlocks())
   }
 
   function updateViewport(device, field, value) {
@@ -834,59 +687,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
     )
   }
 
-  function renderTypographyFields(blockId, value, path = [], depth = 0) {
-    const entries = Object.entries(value)
-    const allLeafValues = entries.every(
-      ([, nestedValue]) =>
-        typeof nestedValue !== 'object' || nestedValue === null || Array.isArray(nestedValue),
-    )
-
-    return entries.map(([key, nestedValue]) => {
-      const fieldPath = [...path, key]
-      const fieldId = `${blockId}-${fieldPath.join('-')}`
-      const isObject = typeof nestedValue === 'object' && nestedValue !== null && !Array.isArray(nestedValue)
-
-      if (isObject) {
-        return (
-          <div
-            key={fieldId}
-            className={`space-y-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800 ${
-              depth > 0 ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-white dark:bg-zinc-900'
-            }`}
-          >
-            <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              {formatFieldLabel(key)}
-            </div>
-            <div
-              className={
-                allLeafValues
-                  ? 'grid gap-3 md:grid-cols-2 xl:grid-cols-3'
-                  : 'grid gap-4 xl:grid-cols-2'
-              }
-            >
-              {renderTypographyFields(blockId, nestedValue, fieldPath, depth + 1)}
-            </div>
-          </div>
-        )
-      }
-
-      return (
-        <label key={fieldId} className="space-y-1 rounded-lg">
-          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            {formatFieldLabel(key)}
-          </span>
-          <input
-            type="text"
-            value={nestedValue ?? ''}
-            onChange={(e) => updateTypographyBlockValue(blockId, fieldPath, e.target.value)}
-            disabled={isRunning}
-            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
-          />
-        </label>
-      )
-    })
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -898,7 +698,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
             Storefront audit
           </h1>
           <p className="mt-1 text-sm text-[#3C3D41]/70">
-            Save URL, pages, viewports, and typography to this project. Perfect Pixel baselines are uploaded per run.
+            URL, pages, and typography load from this project’s saved defaults. Change them for a staging run if
+            you need to. Save project setup only when you want those values to become the new default.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -957,7 +758,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     Enter the storefront URL
                   </h2>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    Use the public page you want to audit, like `https://example.com`.
+                    Loaded from the project default. You can point this run at staging or another environment
+                    without changing the saved project URL unless you click Save project setup.
                   </p>
                 </div>
 
@@ -1274,109 +1076,13 @@ export default function AuditWizard({ project, onSaveConfig }) {
 
             {currentStep === 'config' && isTypography && (
               <div className="space-y-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                      Edit typography blocks
-                    </h2>
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                      Each block maps to a real HTML tag group used by the audit.
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={resetTypographyTemplate}
-                      disabled={isRunning}
-                      className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
-                    >
-                      Reset template
-                    </button>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
-                  <div className="font-medium text-zinc-800 dark:text-zinc-100">Supported tag mapping</div>
-                  <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-                    {TYPOGRAPHY_BLOCK_OPTIONS.map((option) => (
-                      <div key={option.name} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-                        <div className="text-sm font-medium">{option.label}</div>
-                        <div className="text-xs text-zinc-500 dark:text-zinc-400">Matches: {option.matches}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {missingTypographyBlocks.length > 0 && (
-                  <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-                    <div className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-100">
-                      Restore a removed block
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {missingTypographyBlocks.map((option) => (
-                        <button
-                          key={option.name}
-                          type="button"
-                          onClick={() => addTypographyBlock(option.name)}
-                          disabled={isRunning}
-                          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
-                        >
-                          Add {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-4">
-                  {typographyBlocks.map((block) => (
-                    <div
-                      key={block.id}
-                      ref={(node) => {
-                        if (node) {
-                          typographyBlockRefs.current[block.id] = node
-                        }
-                      }}
-                      className={`rounded-xl border p-4 transition ${
-                        highlightedTypographyBlockId === block.id
-                          ? 'border-blue-500 ring-2 ring-blue-500/40'
-                          : 'border-zinc-200 dark:border-zinc-800'
-                      }`}
-                    >
-                      <div className="mb-3 flex items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-                            {getTypographyBlockMeta(block.name).label}
-                          </h3>
-                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                            Matches: {getTypographyBlockMeta(block.name).matches}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => removeTypographyBlock(block.id)}
-                            disabled={isRunning || typographyBlocks.length === 1}
-                            className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400 cursor-pointer"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="space-y-3">
-                          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                            Typography values for {getTypographyBlockMeta(block.name).label}
-                          </div>
-                          <div className="space-y-3">
-                            {renderTypographyFields(block.id, block.value)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <TypographyEditor
+                  title="Typography for this run"
+                  description="These values start from the project default. Change them for this audit (for example a staging URL) without updating the saved default unless you click Save project setup."
+                  blocks={typographyBlocks}
+                  onChange={setTypographyBlocks}
+                  disabled={isRunning}
+                />
               </div>
             )}
 
@@ -1665,7 +1371,10 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   backdrops are hidden automatically with the matched element. Use “Hide all fixed overlays” if needed.
                 </li>
                 <li>Selectors can be CSS selectors or data-testid shortcuts supported by the audit kit.</li>
-                <li>Typography, URL, pages, and viewport settings can be saved to this project.</li>
+                <li>
+                  Typography, URL, pages, and viewports load from project Settings. Edits here apply to this run
+                  until you save them as the project default.
+                </li>
               </ul>
             </div>
           </div>

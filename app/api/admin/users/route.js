@@ -1,20 +1,23 @@
-import { createUserRecord, getAccountStore, publicUser } from '../../../../lib/account-store.js'
-import { jsonError, requireAdmin } from '../../../../lib/require-auth.js'
+import { createInvitedUser, listVisibleUsers } from '../../../../lib/account-store.js'
+import { jsonError, requireUserManager } from '../../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const auth = await requireAdmin()
+  const auth = await requireUserManager()
   if (auth.error) return auth.error
 
-  const store = getAccountStore()
-  const users = (await store.listUsers()).map(publicUser)
-  return Response.json({ users })
+  try {
+    const users = await listVisibleUsers(auth.user)
+    return Response.json({ users })
+  } catch (error) {
+    return jsonError(error, 500)
+  }
 }
 
 export async function POST(request) {
-  const auth = await requireAdmin()
+  const auth = await requireUserManager()
   if (auth.error) return auth.error
 
   let body
@@ -25,15 +28,14 @@ export async function POST(request) {
   }
 
   try {
-    const store = getAccountStore()
-    const user = await createUserRecord(store, {
+    const user = await createInvitedUser(auth.user, {
       email: body?.email,
       password: body?.password,
       name: body?.name,
-      role: body?.role ?? 'member',
+      role: body?.role,
       projectIds: body?.projectIds,
     })
-    return Response.json({ user: publicUser(user) }, { status: 201 })
+    return Response.json({ user }, { status: 201 })
   } catch (error) {
     return jsonError(error)
   }
