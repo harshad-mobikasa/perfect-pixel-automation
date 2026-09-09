@@ -2,6 +2,8 @@ import { createReadStream } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { getJobStore } from '../../../../../lib/job-store.js'
 import { getFileStore } from '../../../../../lib/shopify-file-store.js'
+import { canAccessJob } from '../../../../../lib/account-store.js'
+import { requireUser } from '../../../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,6 +21,9 @@ function pickReportFile(reportFiles, requestedFile) {
 }
 
 export async function GET(request, { params }) {
+  const auth = await requireUser()
+  if (auth.error) return auth.error
+
   const { jobId } = await params
   const requestUrl = new URL(request.url)
   const requestedFile = requestUrl.searchParams.get('file')
@@ -26,7 +31,7 @@ export async function GET(request, { params }) {
   const fileStore = getFileStore()
   const job = await jobStore.getJob(jobId)
 
-  if (!job) {
+  if (!job || !(await canAccessJob(auth.user, job))) {
     return Response.json({ error: 'Job not found' }, { status: 404 })
   }
 
