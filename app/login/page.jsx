@@ -4,6 +4,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { PasswordField } from '../../components/password-field.jsx'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -74,16 +75,12 @@ export default function LoginPage() {
                 className="w-full rounded-xl border border-[#3C3D41]/15 px-3 py-3 outline-none focus:ring-2 focus:ring-[#F58220]"
               />
             </label>
-            <label className="mt-4 block space-y-1">
-              <span className="text-sm font-medium">Password</span>
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="w-full rounded-xl border border-[#3C3D41]/15 px-3 py-3 outline-none focus:ring-2 focus:ring-[#F58220]"
-              />
-            </label>
+            <PasswordField
+              label="Password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
 
             {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
 

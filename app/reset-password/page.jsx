@@ -1,5 +1,6 @@
 'use client'
 
+import { PasswordField } from '../../components/password-field.jsx'
 import Image from 'next/image'
 import { Suspense, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -44,24 +45,19 @@ function ResetPasswordForm() {
         Use the reset link from your Admin or Project admin. Links expire after one hour.
       </p>
 
-      <label className="mt-6 block space-y-1">
-        <span className="text-sm font-medium">New password</span>
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          className="w-full rounded-xl border border-[#3C3D41]/15 px-3 py-3 outline-none focus:ring-2 focus:ring-[#F58220]"
-        />
-      </label>
-      <label className="mt-4 block space-y-1">
-        <span className="text-sm font-medium">Confirm password</span>
-        <input
-          type="password"
-          value={confirmPassword}
-          onChange={(event) => setConfirmPassword(event.target.value)}
-          className="w-full rounded-xl border border-[#3C3D41]/15 px-3 py-3 outline-none focus:ring-2 focus:ring-[#F58220]"
-        />
-      </label>
+      <PasswordField
+        className="mt-6"
+        label="New password"
+        autoComplete="new-password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+      />
+      <PasswordField
+        label="Confirm password"
+        autoComplete="new-password"
+        value={confirmPassword}
+        onChange={(event) => setConfirmPassword(event.target.value)}
+      />
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       {!token && <p className="mt-4 text-sm text-red-600">This reset link is missing a token.</p>}
