@@ -5,6 +5,8 @@ import { parseAuditFormData } from '../../../lib/audit-request.js'
 import { getFileStore } from '../../../lib/shopify-file-store.js'
 import { isShopifyFilesConfigured, shouldProcessAuditsInCurrentProcess } from '../../../lib/runtime-config.js'
 import { validateAuditRequest } from '../../../lib/ssrf-guard.js'
+import { canAccessProject, getAccountStore } from '../../../lib/account-store.js'
+import { requireUser } from '../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,12 +35,26 @@ function checkRateLimit(ip) {
 }
 
 export async function POST(request) {
+  const auth = await requireUser()
+  if (auth.error) return auth.error
+
   let auditRequest
+  let projectId
   try {
     const formData = await request.formData()
+    projectId = typeof formData.get('projectId') === 'string' ? formData.get('projectId').trim() : ''
+    if (!projectId) {
+      throw new Error('Select a project before starting an audit')
+    }
     auditRequest = await parseAuditFormData(formData)
   } catch (err) {
     return Response.json({ error: err.message ?? 'Invalid audit request' }, { status: 400 })
+  }
+
+  const accountStore = getAccountStore()
+  const project = await accountStore.getProjectById(projectId)
+  if (!project || !canAccessProject(auth.user, project)) {
+    return Response.json({ error: 'Project not found' }, { status: 404 })
   }
 
   try {
@@ -76,6 +92,8 @@ export async function POST(request) {
     progress: 5,
     lastMessage: 'Waiting for an available audit slot',
     error: null,
+    userId: auth.user.id,
+    projectId,
   }
 
   await jobStore.createJob(jobId, initialJob)
