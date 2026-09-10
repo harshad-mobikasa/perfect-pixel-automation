@@ -38,13 +38,26 @@ Same two parts, on two machines:
 - Do **not** run `npm run worker` on Vercel.
 - Do **not** add `APP_ROLE` on Vercel. That variable is only for Docker. Vercel always runs the website.
 
-**2. Worker — your server (Docker)**
+**2. Worker — a server (not Vercel)**
 
-- Put the same env vars on that server.
-- Set `APP_ROLE=worker`.
-- Start/restart the container.
+Vercel has no Docker container and no `APP_ROLE`. I cannot restart production from this laptop — that only exists on **your worker server** after you start it.
 
-Audits only run while this worker is up. Website on Vercel talks to Redis; the worker reads jobs from Redis and saves PDFs to Shopify.
+**First time (once):** on that server, build and start a container named `audit-worker`:
+
+```bash
+docker build --secret id=npm_token,env=NPM_TOKEN -t audit-app .
+docker run -d --restart unless-stopped --name audit-worker --env-file .env -e APP_ROLE=worker audit-app
+```
+
+**Later (new kit or new npm token):** on that same server:
+
+```bash
+docker restart audit-worker
+```
+
+The name is always `audit-worker` if you started it with `--name audit-worker`. You do not need `docker ps` to guess it.
+
+If you only deployed Vercel and never ran those Docker commands on a server, **there is no production worker yet**. The live site will queue audits until this container is running.
 
 If the worker is stopped, the site still works, but new audits will sit in the queue until you start it again.
 

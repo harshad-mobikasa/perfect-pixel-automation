@@ -6,7 +6,7 @@ import { getFileStore } from '../../../lib/shopify-file-store.js'
 import { isShopifyFilesConfigured, shouldProcessAuditsInCurrentProcess } from '../../../lib/runtime-config.js'
 import { validateAuditRequest } from '../../../lib/ssrf-guard.js'
 import { canAccessProject, getAccountStore } from '../../../lib/account-store.js'
-import { requireUser } from '../../../lib/require-auth.js'
+import { jsonNoStore, requireUser } from '../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -15,6 +15,68 @@ export const maxDuration = 60
 const RATE_LIMIT = 5
 const RATE_WINDOW_MS = 10 * 60 * 1000
 const QUEUE_CAP = 20
+
+async function summarizeUserJobs(jobStore, userId, projectId) {
+  const jobs = await jobStore.listJobsForUser(userId, projectId)
+  const live = typeof jobStore.compactPendingQueue === 'function' ? await jobStore.compactPendingQueue() : null
+  const runningCount =
+    typeof jobStore.getRunningCount === 'function'
+      ? await jobStore.getRunningCount()
+      : (await jobStore.getQueuePosition(jobs[0]?.id ?? ''))?.runningCount ?? 0
+
+  const summaries = []
+  for (const job of jobs) {
+    if (job.userId !== userId) continue
+    let queue = { position: null, waitingAhead: 0, runningCount }
+    if (job.status === 'queued') {
+      if (Array.isArray(live)) {
+        const index = live.indexOf(job.id)
+        queue =
+          index === -1
+            ? { position: null, waitingAhead: 0, runningCount }
+            : { position: index + 1, waitingAhead: index, runningCount }
+      } else {
+        queue = await jobStore.getQueuePosition(job.id)
+      }
+    }
+    summaries.push({
+      id: job.id,
+      status: job.status,
+      suite: job.suite ?? null,
+      error: job.error ?? null,
+      stage: job.stage ?? null,
+      progress: job.progress ?? null,
+      lastMessage: job.lastMessage ?? null,
+      createdAt: job.createdAt ?? null,
+      queuePosition: queue?.position ?? null,
+      waitingAhead: queue?.waitingAhead ?? 0,
+      runningCount: queue?.runningCount ?? runningCount,
+      reportFiles:
+        job.status === 'done' ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName })) : [],
+    })
+  }
+  return summaries
+}
+
+export async function GET(request) {
+  const auth = await requireUser()
+  if (auth.error) return auth.error
+
+  const projectId = new URL(request.url).searchParams.get('projectId') ?? ''
+  if (!projectId) {
+    return Response.json({ error: 'projectId is required' }, { status: 400 })
+  }
+
+  const accountStore = getAccountStore()
+  const project = await accountStore.getProjectById(projectId)
+  if (!project || !canAccessProject(auth.user, project)) {
+    return Response.json({ error: 'Project not found' }, { status: 404 })
+  }
+
+  const jobStore = getJobStore()
+  const jobs = await summarizeUserJobs(jobStore, auth.user.id, projectId)
+  return jsonNoStore({ jobs })
+}
 
 function clientIp(request) {
   return (

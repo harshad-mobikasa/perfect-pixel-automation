@@ -1,6 +1,6 @@
 import { getJobStore } from '../../../../lib/job-store.js'
 import { canAccessJob } from '../../../../lib/account-store.js'
-import { requireUser } from '../../../../lib/require-auth.js'
+import { jsonNoStore, requireUser } from '../../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,13 +17,18 @@ export async function GET(_request, { params }) {
     return Response.json({ error: 'Job not found' }, { status: 404 })
   }
 
-  return Response.json({
+  const queue = job.status === 'queued' ? await jobStore.getQueuePosition(jobId) : null
+
+  return jsonNoStore({
     status: job.status,
     error: job.error ?? null,
     stage: job.stage ?? null,
     progress: job.progress ?? null,
     lastMessage: job.lastMessage ?? null,
-    queuePosition: job.status === 'queued' ? await jobStore.getQueuePosition(jobId) : null,
+    suite: job.suite ?? null,
+    queuePosition: queue?.position ?? null,
+    waitingAhead: queue?.waitingAhead ?? 0,
+    runningCount: queue?.runningCount ?? 0,
     reportFiles:
       job.status === 'done'
         ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName }))

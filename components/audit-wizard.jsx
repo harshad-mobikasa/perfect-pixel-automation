@@ -160,6 +160,57 @@ function hydrateViewport(rawViewport) {
   }
 }
 
+function jobStorageKey(projectId) {
+  return `audit-active-job:${projectId}`
+}
+
+function readStoredJob(projectId) {
+  if (!projectId || typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(jobStorageKey(projectId))
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredJob(projectId, payload) {
+  if (!projectId || typeof window === 'undefined') return
+  window.sessionStorage.setItem(jobStorageKey(projectId), JSON.stringify(payload))
+}
+
+function clearStoredJob(projectId) {
+  if (!projectId || typeof window === 'undefined') return
+  window.sessionStorage.removeItem(jobStorageKey(projectId))
+}
+
+function suiteLabel(suiteId) {
+  return SUITES.find((suite) => suite.id === suiteId)?.label ?? suiteId ?? 'Audit'
+}
+
+function tabLabel(job) {
+  const name = suiteLabel(job.suite)
+  if (job.status === 'queued') {
+    return job.queuePosition ? `${name} · #${job.queuePosition}` : `${name} · queued`
+  }
+  if (job.status === 'running') return `${name} · running`
+  if (job.status === 'done') return `${name} · done`
+  if (job.status === 'failed') return `${name} · error`
+  return name
+}
+
+const COLLAPSE_FINISHED_MS = 45 * 1000
+
+function queueStatusText(status, queuePosition, waitingAhead, runningCount) {
+  if (status !== 'queued') return null
+  if (!queuePosition || queuePosition <= 1) {
+    if (runningCount > 0) return 'An audit is running now. Yours is next.'
+    return 'You are first in line. This run will start next.'
+  }
+  const ahead = waitingAhead || queuePosition - 1
+  return `${ahead} audit${ahead === 1 ? '' : 's'} ahead of you. You are #${queuePosition} in the queue.`
+}
+
 export default function AuditWizard({ project, onSaveConfig }) {
   const [url, setUrl] = useState(project?.config?.url ?? '')
   const [activeSuite, setActiveSuite] = useState(null)
@@ -176,7 +227,14 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const [jobProgress, setJobProgress] = useState(null)
   const [jobLastMessage, setJobLastMessage] = useState(null)
   const [queuePosition, setQueuePosition] = useState(null)
+  const [waitingAhead, setWaitingAhead] = useState(0)
+  const [runningCount, setRunningCount] = useState(0)
   const [reportFiles, setReportFiles] = useState([])
+  const [myJobs, setMyJobs] = useState([])
+  const [selectedJobId, setSelectedJobId] = useState(null)
+  const [finishedSeenAt, setFinishedSeenAt] = useState({})
+  const [nowTick, setNowTick] = useState(Date.now())
+  const [starting, setStarting] = useState(false)
   const startRef = useRef(null)
   const pollRef = useRef(null)
   const tickRef = useRef(null)
@@ -184,7 +242,15 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const isPixelmatch = activeSuite === 'pixelmatch'
   const isResponsive = activeSuite === 'responsive'
   const isTypography = activeSuite === 'typography'
-  const isRunning = status === 'queued' || status === 'running'
+  const visibleJobs = myJobs.filter((job) => {
+    if (job.status === 'queued' || job.status === 'running') return true
+    const seenAt = finishedSeenAt[job.id]
+    if (!seenAt) return true
+    return nowTick - seenAt < COLLAPSE_FINISHED_MS
+  })
+  const visibleJobKey = visibleJobs.map((job) => job.id).join('|')
+  const selectedJob = visibleJobs.find((job) => job.id === selectedJobId) ?? null
+  const isRunning = selectedJob?.status === 'queued' || selectedJob?.status === 'running'
   const estSec = SUITES.find((suite) => suite.id === activeSuite)?.estSec ?? 120
   const remaining = Math.max(0, estSec - elapsed)
   const fallbackPct = Math.min(95, Math.round((elapsed / estSec) * 100))
@@ -210,6 +276,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setJobProgress(null)
     setJobLastMessage(null)
     setQueuePosition(null)
+    setWaitingAhead(0)
+    setRunningCount(0)
     setReportFiles([])
     startRef.current = null
   }
@@ -225,6 +293,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   }
 
   function clearAll() {
+    clearStoredJob(project?.id)
     resetJobState()
     applyProjectConfig(project?.config)
   }
@@ -259,9 +328,66 @@ export default function AuditWizard({ project, onSaveConfig }) {
     }
   }
 
-  function resetForEditing() {
+  function applyJobSnapshot(job) {
+    if (!job) return
+    setJobId(job.id)
+    setStatus(job.status ?? null)
+    setJobError(job.error ?? null)
+    setJobStage(job.stage ?? null)
+    setJobProgress(job.progress ?? null)
+    setJobLastMessage(job.lastMessage ?? null)
+    setQueuePosition(job.queuePosition ?? null)
+    setWaitingAhead(job.waitingAhead ?? 0)
+    setRunningCount(job.runningCount ?? 0)
+    setReportFiles(Array.isArray(job.reportFiles) ? job.reportFiles : [])
+    if (job.createdAt) {
+      startRef.current = job.createdAt
+      setElapsed(Math.max(0, Math.floor((Date.now() - job.createdAt) / 1000)))
+    }
+  }
+
+  function selectJob(job) {
+    if (!job) return
+    setSelectedJobId(job.id)
+    applyJobSnapshot(job)
+    writeStoredJob(project?.id, {
+      jobId: job.id,
+      suite: job.suite ?? activeSuite,
+      startedAt: startRef.current ?? Date.now(),
+    })
+  }
+
+  function startNewAudit() {
+    setSelectedJobId(null)
     resetJobState()
-    setStepIndex(Math.max(steps.length - 1, 0))
+    clearStoredJob(project?.id)
+    setStepIndex(0)
+  }
+
+  async function refreshMyJobs() {
+    if (!project?.id) return []
+    const res = await fetch(`/api/audits?projectId=${encodeURIComponent(project.id)}`, { cache: 'no-store' })
+    const data = await res.json().catch(() => ({}))
+    const jobs = Array.isArray(data.jobs) ? data.jobs : []
+    setMyJobs(jobs)
+    setFinishedSeenAt((current) => {
+      const next = { ...current }
+      for (const job of jobs) {
+        if ((job.status === 'done' || job.status === 'failed') && !next[job.id]) {
+          next[job.id] = Date.now()
+        }
+      }
+      return next
+    })
+    return jobs
+  }
+
+  function collapseHint(job) {
+    if (job.status !== 'done' && job.status !== 'failed') return null
+    const seenAt = finishedSeenAt[job.id]
+    if (!seenAt) return 'Hides soon'
+    const left = Math.max(0, Math.ceil((COLLAPSE_FINISHED_MS - (nowTick - seenAt)) / 1000))
+    return `Hides in ${left}s`
   }
 
   function addPage() {
@@ -531,7 +657,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   }
 
   async function startAudit() {
-    resetJobState()
+    if (starting) return
 
     let payload
     try {
@@ -542,6 +668,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
       return
     }
 
+    setStarting(true)
     try {
       const res = await fetch('/api/audits', {
         method: 'POST',
@@ -551,14 +678,26 @@ export default function AuditWizard({ project, onSaveConfig }) {
       if (!res.ok) throw new Error(data.error ?? 'Failed to start audit')
 
       startRef.current = Date.now()
-      setJobId(data.jobId)
-      setStatus('queued')
-      setJobStage('Queued')
-      setJobProgress(5)
-      setJobLastMessage('Waiting for an available audit slot')
+      const queued = {
+        id: data.jobId,
+        status: 'queued',
+        suite: payload.definition?.suite ?? activeSuite,
+        error: null,
+        stage: 'Queued',
+        progress: 5,
+        lastMessage: 'Waiting for an available audit slot',
+        queuePosition: null,
+        waitingAhead: 0,
+        runningCount: 0,
+        reportFiles: [],
+      }
+      selectJob(queued)
+      await refreshMyJobs()
     } catch (error) {
       setJobError(error instanceof Error ? error.message : 'Failed to start audit')
       setStatus('failed')
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -572,15 +711,17 @@ export default function AuditWizard({ project, onSaveConfig }) {
 
   useEffect(() => {
     if (!jobId) return
+    let cancelled = false
 
-    pollRef.current = setInterval(async () => {
+    async function pollJob() {
       try {
-        const res = await fetch(`/api/audits/${jobId}`)
+        const res = await fetch(`/api/audits/${jobId}`, { cache: 'no-store' })
+        if (cancelled) return
         if (!res.ok) {
           setStatus('failed')
           setJobError(
             res.status === 404
-              ? 'Job not found. The run may have expired or the server restarted.'
+              ? 'This run is no longer available. It may have expired (jobs are kept 24 hours) or the worker restarted.'
               : `Unexpected server error (${res.status})`,
           )
           stopTimers()
@@ -594,7 +735,14 @@ export default function AuditWizard({ project, onSaveConfig }) {
         setJobProgress(data.progress ?? null)
         setJobLastMessage(data.lastMessage ?? null)
         setQueuePosition(data.queuePosition ?? null)
+        setWaitingAhead(data.waitingAhead ?? 0)
+        setRunningCount(data.runningCount ?? 0)
         setReportFiles(Array.isArray(data.reportFiles) ? data.reportFiles : [])
+        writeStoredJob(project?.id, {
+          jobId,
+          suite: data.suite ?? activeSuite,
+          startedAt: startRef.current ?? Date.now(),
+        })
 
         if (data.status === 'done' || data.status === 'failed') {
           stopTimers()
@@ -605,10 +753,57 @@ export default function AuditWizard({ project, onSaveConfig }) {
       } catch {
         // Keep polling on transient errors.
       }
+    }
+
+    pollJob()
+    pollRef.current = setInterval(pollJob, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(pollRef.current)
+    }
+  }, [jobId])
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (!project?.id) return
+    let cancelled = false
+
+    async function load(initial) {
+      const jobs = await refreshMyJobs()
+      if (cancelled || !initial) return
+      const stored = readStoredJob(project.id)
+      const active = jobs.find((job) => job.status === 'queued' || job.status === 'running')
+      const pick = jobs.find((job) => job.id === stored?.jobId) ?? active ?? null
+      if (pick) selectJob(pick)
+    }
+
+    load(true)
+    const timer = setInterval(() => {
+      refreshMyJobs()
     }, 2000)
 
-    return () => clearInterval(pollRef.current)
-  }, [jobId])
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [project?.id])
+
+  useEffect(() => {
+    if (!selectedJob) return
+    applyJobSnapshot(selectedJob)
+  }, [selectedJob])
+
+  useEffect(() => {
+    if (!selectedJobId) return
+    if (visibleJobKey.split('|').includes(selectedJobId)) return
+    setSelectedJobId(null)
+    resetJobState()
+    clearStoredJob(project?.id)
+  }, [visibleJobKey, selectedJobId, project?.id])
 
   function downloadPdf(fileName) {
     const suffix = fileName ? `?file=${encodeURIComponent(fileName)}` : ''
@@ -637,7 +832,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
           <button
             type="button"
             onClick={resetViewportDefaults}
-            disabled={isRunning}
             className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
           >
             Reset sizes
@@ -660,7 +854,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     inputMode="numeric"
                     value={viewportConfig[device].width}
                     onChange={(event) => updateViewport(device, 'width', event.target.value)}
-                    disabled={isRunning}
                     className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
                   />
                 </label>
@@ -673,7 +866,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     inputMode="numeric"
                     value={viewportConfig[device].height}
                     onChange={(event) => updateViewport(device, 'height', event.target.value)}
-                    disabled={isRunning}
                     className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
                   />
                 </label>
@@ -705,14 +897,13 @@ export default function AuditWizard({ project, onSaveConfig }) {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={saveProjectConfig}
-            disabled={isRunning || saveState === 'saving'}
+            disabled={saveState === 'saving'}
             className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] disabled:opacity-50 cursor-pointer"
           >
             {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save project setup'}
           </button>
           <button
             onClick={clearAll}
-            disabled={isRunning}
             className="rounded-lg border border-[#3C3D41]/20 px-4 py-2 text-sm font-medium text-[#3C3D41] disabled:opacity-50 cursor-pointer"
           >
             Reset to saved
@@ -721,6 +912,138 @@ export default function AuditWizard({ project, onSaveConfig }) {
       </div>
       {typeof saveState === 'string' && saveState !== 'saving' && saveState !== 'saved' && (
         <p className="text-sm text-red-600">{saveState}</p>
+      )}
+      {!selectedJobId && jobError && (
+        <p className="text-sm text-red-600">{jobError}</p>
+      )}
+
+      {visibleJobs.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Your runs</h2>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                Only audits you started in this project. Queue numbers update live. Finished and failed tabs hide
+                after 45 seconds.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={startNewAudit}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium dark:border-zinc-700 cursor-pointer"
+            >
+              Queue another
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {visibleJobs.map((job) => {
+              const selected = job.id === selectedJobId
+              const failed = job.status === 'failed'
+              return (
+                <button
+                  key={job.id}
+                  type="button"
+                  onClick={() => selectJob(job)}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm cursor-pointer ${
+                    selected
+                      ? failed
+                        ? 'border-red-400 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200'
+                        : 'border-[#F58220] bg-[#F58220] text-white'
+                      : failed
+                        ? 'border-red-200 bg-white text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200'
+                  }`}
+                >
+                  <div className="font-medium">{tabLabel(job)}</div>
+                  {collapseHint(job) && (
+                    <div className={`mt-0.5 text-[11px] ${selected ? 'opacity-80' : 'text-zinc-500'}`}>
+                      {collapseHint(job)}
+                    </div>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          {selectedJob && (
+            <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              {isRunning && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-[#F58220] animate-pulse" />
+                      <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                        {jobStage ?? (status === 'queued' ? 'Queued...' : `Running ${suiteLabel(selectedJob.suite)}...`)}
+                      </span>
+                    </div>
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">{elapsed}s elapsed</span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                    <div
+                      className="h-full rounded-full bg-[#F58220] transition-all duration-1000"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  {jobLastMessage && (
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Latest update: {jobLastMessage}</p>
+                  )}
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                    {status === 'queued'
+                      ? queueStatusText(status, queuePosition, waitingAhead, runningCount)
+                      : remaining > 0
+                        ? `Typical remaining time: ${fmtTime(remaining)}`
+                        : 'This run is taking longer than usual, but it is still working.'}
+                  </p>
+                </div>
+              )}
+
+              {status === 'done' && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-green-600 dark:text-green-400">Audit complete.</p>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                    Download below, or open the project <span className="font-medium">Reports</span> tab. This tab
+                    hides in a moment.
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    {reportFiles.length > 1 ? (
+                      reportFiles.map((file) => (
+                        <button
+                          key={file.fileName}
+                          type="button"
+                          onClick={() => downloadPdf(file.fileName)}
+                          className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                        >
+                          Download {file.fileName}
+                        </button>
+                      ))
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => downloadPdf()}
+                        className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                      >
+                        Download PDF report
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {status === 'failed' && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-red-600 dark:text-red-400">This audit did not finish</p>
+                  <p className="text-sm text-zinc-800 dark:text-zinc-100 break-words">
+                    {jobError || 'The worker reported a failure, but no extra error text was saved.'}
+                  </p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Nothing was saved to Reports for this run. This tab hides after 45 seconds. Use Queue another
+                    to start a new audit without waiting.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
         <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -767,7 +1090,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   type="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  disabled={isRunning}
                   placeholder="https://example.com"
                   className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
@@ -790,7 +1112,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     <button
                       key={suite.id}
                       type="button"
-                      disabled={isRunning}
                       onClick={() => setActiveSuite(suite.id)}
                       className={`rounded-xl border p-4 text-left transition cursor-pointer ${
                         activeSuite === suite.id
@@ -821,7 +1142,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   <button
                     type="button"
                     onClick={addPage}
-                    disabled={isRunning}
                     className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                   >
                     Add page
@@ -841,7 +1161,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
                         <button
                           type="button"
                           onClick={() => removePage(page.id)}
-                          disabled={isRunning || pages.length === 1}
+                          disabled={pages.length === 1}
                           className="text-xs text-red-600 disabled:opacity-40 dark:text-red-400 cursor-pointer"
                         >
                           Remove
@@ -857,7 +1177,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                             type="text"
                             value={page.name}
                             onChange={(e) => updatePage(page.id, 'name', e.target.value)}
-                            disabled={isRunning}
                             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
                           />
                         </label>
@@ -870,7 +1189,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                             type="text"
                             value={page.url}
                             onChange={(e) => updatePage(page.id, 'url', e.target.value)}
-                            disabled={isRunning}
                             placeholder="/"
                             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
                           />
@@ -913,7 +1231,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                         <button
                           type="button"
                           onClick={() => addComponent(page.id)}
-                          disabled={isRunning}
                           className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                         >
                           Add component
@@ -927,7 +1244,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                         <textarea
                           value={page.hideSelectors}
                           onChange={(e) => updatePage(page.id, 'hideSelectors', e.target.value)}
-                          disabled={isRunning}
                           rows={3}
                           placeholder={"id:newsletter-popup\nclass:cookie-banner\ntestid:promo-modal\ncss:.overlay"}
                           className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
@@ -943,7 +1259,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                           type="checkbox"
                           checked={Boolean(page.hideFixed)}
                           onChange={(e) => updatePage(page.id, 'hideFixed', e.target.checked)}
-                          disabled={isRunning}
                           className="mt-0.5"
                         />
                         <span>
@@ -975,7 +1290,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                               <button
                                 type="button"
                                 onClick={() => removeComponent(page.id, component.id)}
-                                disabled={isRunning}
                                 className="text-xs text-red-600 dark:text-red-400 cursor-pointer"
                               >
                                 Remove
@@ -991,7 +1305,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                                   type="text"
                                   value={component.name}
                                   onChange={(e) => updateComponent(page.id, component.id, 'name', e.target.value)}
-                                  disabled={isRunning}
                                   className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
                                 />
                               </label>
@@ -1004,7 +1317,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                                   type="text"
                                   value={component.selector}
                                   onChange={(e) => updateComponent(page.id, component.id, 'selector', e.target.value)}
-                                  disabled={isRunning}
                                   placeholder="header, .hero, #cta, [data-testid=&quot;hero&quot;]"
                                   className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-950"
                                 />
@@ -1017,7 +1329,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                                 <input
                                   type="file"
                                   accept="image/png"
-                                  disabled={isRunning}
                                   onChange={(e) => updateComponent(page.id, component.id, 'desktopFile', e.target.files?.[0] ?? null)}
                                   className="block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
                                 />
@@ -1035,7 +1346,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                                 <input
                                   type="file"
                                   accept="image/png"
-                                  disabled={isRunning}
                                   onChange={(e) => updateComponent(page.id, component.id, 'mobileFile', e.target.files?.[0] ?? null)}
                                   className="block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
                                 />
@@ -1081,7 +1391,6 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   description="These values start from the project default. Change them for this audit (for example a staging URL) without updating the saved default unless you click Save project setup."
                   blocks={typographyBlocks}
                   onChange={setTypographyBlocks}
-                  disabled={isRunning}
                 />
               </div>
             )}
@@ -1211,104 +1520,11 @@ export default function AuditWizard({ project, onSaveConfig }) {
               </div>
             )}
 
-            {status && (
-              <div className="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
-                {isRunning && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-[#F58220] animate-pulse" />
-                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                          {jobStage ?? (status === 'queued' ? 'Queued...' : `Running ${activeSuite?.toUpperCase()}...`)}
-                        </span>
-                      </div>
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400">{elapsed}s elapsed</span>
-                    </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-                      <div
-                        className="h-full rounded-full bg-[#F58220] transition-all duration-1000"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    {jobLastMessage && (
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Latest update: {jobLastMessage}
-                      </p>
-                    )}
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      {status === 'queued' && queuePosition
-                        ? `Queue position: ${queuePosition}`
-                        : remaining > 0
-                          ? `Typical remaining time: ${fmtTime(remaining)}`
-                          : 'This run is taking longer than usual, but it is still working.'}
-                    </p>
-                  </div>
-                )}
-
-                {status === 'done' && (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-green-600 dark:text-green-400">
-                      Audit complete in {elapsed}s.
-                    </p>
-                    <div className="flex flex-wrap gap-3">
-                      {reportFiles.length > 1 ? (
-                        reportFiles.map((file) => (
-                          <button
-                            key={file.fileName}
-                            onClick={() => downloadPdf(file.fileName)}
-                            className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
-                          >
-                            Download {file.fileName}
-                          </button>
-                        ))
-                      ) : (
-                        <button
-                          onClick={() => downloadPdf()}
-                          className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
-                        >
-                          Download PDF report
-                        </button>
-                      )}
-                      <button
-                        onClick={clearAll}
-                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
-                      >
-                        Clear and start new
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {status === 'failed' && (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-red-600 dark:text-red-400">Audit failed</p>
-                    {jobError && (
-                      <p className="text-sm text-zinc-600 dark:text-zinc-300 break-words">{jobError}</p>
-                    )}
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        onClick={resetForEditing}
-                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
-                      >
-                        Back to setup
-                      </button>
-                      <button
-                        onClick={clearAll}
-                        className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
-                      >
-                        Clear and start new
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
             <div className="mt-6 flex items-center justify-between gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
               <button
                 type="button"
                 onClick={goBack}
-                disabled={stepIndex === 0 || isRunning}
+                disabled={stepIndex === 0}
                 className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium disabled:opacity-40 dark:border-zinc-700 cursor-pointer"
               >
                 Back
@@ -1318,16 +1534,16 @@ export default function AuditWizard({ project, onSaveConfig }) {
                 <button
                   type="button"
                   onClick={startAudit}
-                  disabled={isRunning || stepErrors.length > 0}
+                  disabled={starting || stepErrors.length > 0}
                   className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] disabled:opacity-40 cursor-pointer"
                 >
-                  Start audit
+                  {starting ? 'Queuing…' : 'Start audit'}
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={goNext}
-                  disabled={isRunning || !canGoNext()}
+                  disabled={!canGoNext()}
                   className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] disabled:opacity-40 cursor-pointer"
                 >
                   Continue
