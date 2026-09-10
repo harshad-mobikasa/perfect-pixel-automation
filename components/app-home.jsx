@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import AuditWizard from './audit-wizard'
 import { ProjectDefaultTypography } from './typography-editor.jsx'
+import { AssignedProjectChips, ProjectChecklist } from './project-checklist.jsx'
 import { GeneratedPasswordReveal, PasswordField } from './password-field.jsx'
 import {
   RETENTION_OPTIONS,
@@ -92,6 +93,9 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [reportDateTo, setReportDateTo] = useState('')
   const [activityEvents, setActivityEvents] = useState([])
   const [activityRetentionDays, setActivityRetentionDays] = useState(45)
+  const [assignEditor, setAssignEditor] = useState(null)
+  const [assignDraftIds, setAssignDraftIds] = useState([])
+  const [assignSaving, setAssignSaving] = useState(false)
   const [inviteForm, setInviteForm] = useState({
     name: '',
     email: '',
@@ -115,6 +119,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   useEffect(() => {
     setGeneratedPassword('')
+    setAssignEditor(null)
   }, [view, selectedProjectId, projectTab])
 
   useEffect(() => {
@@ -383,6 +388,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   async function handleAssignUserProjects(entry, projectIds) {
     setNotice('')
     setError('')
+    setAssignSaving(true)
     try {
       const data = await readJson(
         await fetch(`/api/admin/users/${entry.id}`, {
@@ -392,11 +398,15 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
         }),
       )
       setUsers((current) => current.map((userEntry) => (userEntry.id === data.user.id ? data.user : userEntry)))
+      await refreshAdminUsers()
       await refreshProjects()
       if (selectedProjectId) await loadProjectExtras(selectedProjectId)
+      setAssignEditor(null)
       setNotice(`Projects updated for ${entry.email}`)
     } catch (submitError) {
       setError(submitError.message)
+    } finally {
+      setAssignSaving(false)
     }
   }
 
@@ -1047,24 +1057,14 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     </label>
                   </div>
                   {needsProjectAssignment && (
-                    <fieldset className="space-y-2">
-                      <legend className="text-sm font-medium">Assign to projects</legend>
-                      {projects.map((project) => (
-                        <label key={project.id} className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={userForm.projectIds.includes(project.id)}
-                            onChange={() =>
-                              setUserForm((current) => ({
-                                ...current,
-                                projectIds: toggleValue(current.projectIds, project.id),
-                              }))
-                            }
-                          />
-                          {project.name}
-                        </label>
-                      ))}
-                    </fieldset>
+                    <div className="space-y-2">
+                      <span className="text-sm font-medium">Assign to projects</span>
+                      <ProjectChecklist
+                        projects={projects}
+                        selectedIds={userForm.projectIds}
+                        onChange={(projectIds) => setUserForm((current) => ({ ...current, projectIds }))}
+                      />
+                    </div>
                   )}
                   <button
                     type="submit"
@@ -1093,33 +1093,25 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         <td className="px-4 py-3">
                           {isAdmin(entry) ? (
                             'All projects'
-                          ) : admin ? (
-                            <fieldset className="space-y-1">
-                              {projects.map((project) => (
-                                <label key={project.id} className="flex items-center gap-2 text-sm font-normal">
-                                  <input
-                                    type="checkbox"
-                                    checked={(entry.projectIds ?? []).includes(project.id)}
-                                    onChange={() =>
-                                      handleAssignUserProjects(
-                                        entry,
-                                        toggleValue(entry.projectIds ?? [], project.id),
-                                      )
-                                    }
-                                  />
-                                  {project.name}
-                                  {entry.projectRoles?.[project.id]
-                                    ? ` (${roleLabel(entry.projectRoles[project.id])})`
-                                    : ''}
-                                </label>
-                              ))}
-                              {projects.length === 0 && <span className="text-[#3C3D41]/60">No projects yet</span>}
-                            </fieldset>
                           ) : (
-                            projects
-                              .filter((project) => (entry.projectIds ?? []).includes(project.id))
-                              .map((project) => `${project.name} (${roleLabel(entry.projectRoles?.[project.id] ?? ROLE.DEV)})`)
-                              .join(', ') || 'None'
+                            <div className="flex flex-col items-start gap-2">
+                              <AssignedProjectChips
+                                projects={projects}
+                                projectIds={entry.projectIds ?? []}
+                              />
+                              {admin && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAssignEditor(entry)
+                                    setAssignDraftIds(entry.projectIds ?? [])
+                                  }}
+                                  className="text-xs font-medium text-[#F58220] hover:underline cursor-pointer"
+                                >
+                                  Manage projects
+                                </button>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3">
@@ -1248,6 +1240,46 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
           )}
         </main>
       </div>
+
+      {assignEditor && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#3C3D41]/40 p-4"
+          onClick={() => {
+            if (!assignSaving) setAssignEditor(null)
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">Assign projects</h2>
+            <p className="mt-1 text-sm text-[#3C3D41]/70">
+              {assignEditor.name} ({assignEditor.email})
+            </p>
+            <div className="mt-4">
+              <ProjectChecklist projects={projects} selectedIds={assignDraftIds} onChange={setAssignDraftIds} />
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={assignSaving}
+                onClick={() => setAssignEditor(null)}
+                className="rounded-lg border border-[#3C3D41]/15 px-4 py-2 text-sm cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={assignSaving}
+                onClick={() => handleAssignUserProjects(assignEditor, assignDraftIds)}
+                className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer disabled:opacity-40"
+              >
+                {assignSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

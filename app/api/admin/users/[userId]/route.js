@@ -17,12 +17,13 @@ export async function PATCH(request, { params }) {
   }
 
   try {
-    const user = await updateUser(auth.user, userId, {
-      name: body?.name,
-      role: body?.role,
-      projectIds: body?.projectIds,
-      password: body?.password,
-    })
+    const patch = {}
+    if (typeof body?.name === 'string') patch.name = body.name
+    if (body?.role != null) patch.role = body.role
+    if (Array.isArray(body?.projectIds)) patch.projectIds = body.projectIds
+    if (typeof body?.password === 'string' && body.password) patch.password = body.password
+
+    const user = await updateUser(auth.user, userId, patch)
 
     if (!user) {
       return Response.json({ error: 'User not found' }, { status: 404 })
