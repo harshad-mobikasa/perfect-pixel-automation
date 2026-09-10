@@ -198,6 +198,7 @@ function isBehindOthers(job) {
 function tabLabel(job) {
   const name = suiteLabel(job.suite)
   if (job.status === 'queued') {
+    if (job.workerRequired && job.workerOnline === false) return `${name} · worker off`
     if (isBehindOthers(job) && job.queuePosition) return `${name} · #${job.queuePosition}`
     if (isBehindOthers(job)) return `${name} · waiting`
     return `${name} · starting`
@@ -210,8 +211,13 @@ function tabLabel(job) {
 
 const COLLAPSE_FINISHED_MS = 45 * 1000
 
-function queueStatusText(status, queuePosition, waitingAhead, runningCount) {
+function queueStatusText(status, queuePosition, waitingAhead, runningCount, workerRequired, workerOnline, queuedForSec) {
   if (status !== 'queued') return null
+  if (workerRequired && workerOnline === false) {
+    const waited = queuedForSec ? ` It has been waiting ${fmtTime(queuedForSec)}.` : ''
+    const queueNote = queuePosition && queuePosition > 1 ? ` There are ${queuePosition - 1} older audit${queuePosition === 2 ? '' : 's'} ahead.` : ''
+    return `Worker is offline, so reports will not generate yet.${waited}${queueNote} Start or restart the production worker to process this queue.`
+  }
   const ahead = waitingAhead || (queuePosition > 1 ? queuePosition - 1 : 0)
   if (ahead > 0) {
     return `${ahead} audit${ahead === 1 ? '' : 's'} ahead of you. You are #${queuePosition} in the queue.`
@@ -248,6 +254,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const [queuePosition, setQueuePosition] = useState(null)
   const [waitingAhead, setWaitingAhead] = useState(0)
   const [runningCount, setRunningCount] = useState(0)
+  const [workerRequired, setWorkerRequired] = useState(false)
+  const [workerOnline, setWorkerOnline] = useState(null)
+  const [queuedForSec, setQueuedForSec] = useState(null)
   const [reportFiles, setReportFiles] = useState([])
   const [myJobs, setMyJobs] = useState([])
   const [selectedJobId, setSelectedJobId] = useState(null)
@@ -279,6 +288,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const displayQueuePosition = selectedJob?.queuePosition ?? queuePosition
   const displayWaitingAhead = selectedJob?.waitingAhead ?? waitingAhead
   const displayRunningCount = selectedJob?.runningCount ?? runningCount
+  const displayWorkerRequired = selectedJob?.workerRequired ?? workerRequired
+  const displayWorkerOnline = selectedJob?.workerOnline ?? workerOnline
+  const displayQueuedForSec = selectedJob?.queuedForSec ?? queuedForSec
   const displayReportFiles = Array.isArray(selectedJob?.reportFiles) ? selectedJob.reportFiles : reportFiles
   const isRunning = displayStatus === 'queued' || displayStatus === 'running'
   const showRunTabs = visibleJobs.length > 1
@@ -310,6 +322,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setQueuePosition(null)
     setWaitingAhead(0)
     setRunningCount(0)
+    setWorkerRequired(false)
+    setWorkerOnline(null)
+    setQueuedForSec(null)
     setReportFiles([])
     startRef.current = null
   }
@@ -371,6 +386,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setQueuePosition(job.queuePosition ?? null)
     setWaitingAhead(job.waitingAhead ?? 0)
     setRunningCount(job.runningCount ?? 0)
+    setWorkerRequired(Boolean(job.workerRequired))
+    setWorkerOnline(typeof job.workerOnline === 'boolean' ? job.workerOnline : null)
+    setQueuedForSec(job.queuedForSec ?? null)
     setReportFiles(Array.isArray(job.reportFiles) ? job.reportFiles : [])
     if (job.createdAt) {
       startRef.current = job.createdAt
@@ -792,6 +810,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
         setQueuePosition(data.queuePosition ?? null)
         setWaitingAhead(data.waitingAhead ?? 0)
         setRunningCount(data.runningCount ?? 0)
+        setWorkerRequired(Boolean(data.workerRequired))
+        setWorkerOnline(typeof data.workerOnline === 'boolean' ? data.workerOnline : null)
+        setQueuedForSec(data.queuedForSec ?? null)
         setReportFiles(Array.isArray(data.reportFiles) ? data.reportFiles : [])
         writeStoredJob(project?.id, {
           jobId,
@@ -1021,7 +1042,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
                       <span className="h-2 w-2 rounded-full bg-[#F58220] animate-pulse" />
                       <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                         {displayStatus === 'queued'
-                          ? selectedIsQueuedBehind
+                          ? displayWorkerRequired && displayWorkerOnline === false
+                            ? 'Worker offline'
+                            : selectedIsQueuedBehind
                             ? displayStage ?? 'Waiting in queue...'
                             : 'Starting…'
                           : displayStage ?? `Running ${suiteLabel(selectedJob.suite)}...`}
@@ -1040,7 +1063,15 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   )}
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
                     {displayStatus === 'queued'
-                      ? queueStatusText(displayStatus, displayQueuePosition, displayWaitingAhead, displayRunningCount)
+                      ? queueStatusText(
+                          displayStatus,
+                          displayQueuePosition,
+                          displayWaitingAhead,
+                          displayRunningCount,
+                          displayWorkerRequired,
+                          displayWorkerOnline,
+                          displayQueuedForSec,
+                        )
                       : remaining > 0
                         ? `Typical remaining time: ${fmtTime(remaining)}`
                         : 'This run is taking longer than usual, but it is still working.'}

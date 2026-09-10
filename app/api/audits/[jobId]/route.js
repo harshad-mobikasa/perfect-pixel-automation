@@ -1,6 +1,7 @@
 import { getJobStore } from '../../../../lib/job-store.js'
 import { canAccessJob } from '../../../../lib/account-store.js'
 import { jsonNoStore, requireUser } from '../../../../lib/require-auth.js'
+import { shouldProcessAuditsInCurrentProcess } from '../../../../lib/runtime-config.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,6 +25,8 @@ export async function GET(_request, { params }) {
       queue = await jobStore.getQueuePosition(jobId)
     }
   }
+  const workerHeartbeat =
+    typeof jobStore.getWorkerHeartbeat === 'function' ? await jobStore.getWorkerHeartbeat() : null
 
   return jsonNoStore({
     status: job.status,
@@ -32,9 +35,13 @@ export async function GET(_request, { params }) {
     progress: job.progress ?? null,
     lastMessage: job.lastMessage ?? null,
     suite: job.suite ?? null,
+    queuedForSec: job.status === 'queued' && job.createdAt ? Math.max(0, Math.round((Date.now() - job.createdAt) / 1000)) : null,
     queuePosition: queue?.position ?? null,
     waitingAhead: queue?.waitingAhead ?? 0,
     runningCount: queue?.runningCount ?? 0,
+    workerRequired: !shouldProcessAuditsInCurrentProcess(),
+    workerOnline: Boolean(workerHeartbeat?.at),
+    workerLastSeenAt: workerHeartbeat?.at ?? null,
     reportFiles:
       job.status === 'done'
         ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName }))

@@ -16,9 +16,20 @@ const RATE_LIMIT = 5
 const RATE_WINDOW_MS = 10 * 60 * 1000
 const QUEUE_CAP = 20
 
+async function getWorkerStatus(jobStore) {
+  const heartbeat =
+    typeof jobStore.getWorkerHeartbeat === 'function' ? await jobStore.getWorkerHeartbeat() : null
+  return {
+    workerRequired: !shouldProcessAuditsInCurrentProcess(),
+    workerOnline: Boolean(heartbeat?.at),
+    workerLastSeenAt: heartbeat?.at ?? null,
+  }
+}
+
 async function summarizeUserJobs(jobStore, userId, projectId) {
   const jobs = await jobStore.listJobsForUser(userId, projectId)
   const live = typeof jobStore.listPendingQueue === 'function' ? await jobStore.listPendingQueue() : null
+  const worker = await getWorkerStatus(jobStore)
   const runningCount =
     typeof jobStore.getRunningCount === 'function'
       ? await jobStore.getRunningCount()
@@ -52,9 +63,13 @@ async function summarizeUserJobs(jobStore, userId, projectId) {
       progress: job.progress ?? null,
       lastMessage: job.lastMessage ?? null,
       createdAt: job.createdAt ?? null,
+      queuedForSec: job.status === 'queued' && job.createdAt ? Math.max(0, Math.round((Date.now() - job.createdAt) / 1000)) : null,
       queuePosition: queue?.position ?? null,
       waitingAhead: queue?.waitingAhead ?? 0,
       runningCount: queue?.runningCount ?? runningCount,
+      workerRequired: worker.workerRequired,
+      workerOnline: worker.workerOnline,
+      workerLastSeenAt: worker.workerLastSeenAt,
       reportFiles:
         job.status === 'done' ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName })) : [],
     })
