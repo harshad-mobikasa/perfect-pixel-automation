@@ -1,7 +1,6 @@
 'use client'
 
 import Image from 'next/image'
-import Link from 'next/link'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { PasswordField } from '../../components/password-field.jsx'
@@ -91,12 +90,6 @@ export default function LoginPage() {
             >
               {submitting ? 'Signing in…' : 'Sign in'}
             </button>
-
-            <p className="mt-4 text-center text-sm">
-              <Link href="/forgot-password" className="text-[#F58220] hover:underline">
-                Forgot password?
-              </Link>
-            </p>
           </form>
         </div>
       </div>
