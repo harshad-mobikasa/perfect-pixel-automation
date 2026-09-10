@@ -102,6 +102,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [members, setMembers] = useState([])
   const [membersProjectId, setMembersProjectId] = useState('')
   const [reports, setReports] = useState([])
+  const [reportsProjectId, setReportsProjectId] = useState('')
+  const [reportsLoading, setReportsLoading] = useState(false)
   const [selectedReportIds, setSelectedReportIds] = useState([])
   const [reportDateFrom, setReportDateFrom] = useState('')
   const [reportDateTo, setReportDateTo] = useState('')
@@ -166,9 +168,13 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       ]
     : [{ value: ROLE.DEV, label: 'Dev' }]
   const needsProjectAssignment = userForm.role === ROLE.DEV || userForm.role === ROLE.PROJECT_ADMIN
+  const selectedProjectReports = useMemo(
+    () => (reportsProjectId === selectedProjectId ? reports : []),
+    [reports, reportsProjectId, selectedProjectId],
+  )
   const visibleReports = useMemo(
-    () => reports.filter((report) => inDateRange(report.createdAt, reportDateFrom, reportDateTo)),
-    [reports, reportDateFrom, reportDateTo],
+    () => selectedProjectReports.filter((report) => inDateRange(report.createdAt, reportDateFrom, reportDateTo)),
+    [selectedProjectReports, reportDateFrom, reportDateTo],
   )
   const teamMembers = useMemo(() => {
     if (!selectedProject) return []
@@ -205,18 +211,28 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       setMembers([])
       setMembersProjectId('')
       setReports([])
+      setReportsProjectId('')
+      setReportsLoading(false)
+      setSelectedReportIds([])
       return
     }
 
-    const [memberData, reportData] = await Promise.all([
-      readJson(await apiFetch(`/api/projects/${projectId}/members`)),
-      readJson(await apiFetch(`/api/projects/${projectId}/reports`)),
-    ])
-    if (requestId !== extrasRequestRef.current) return
-    setMembers(memberData.members ?? [])
-    setMembersProjectId(projectId)
-    setReports(reportData.reports ?? [])
     setSelectedReportIds([])
+    setReportsProjectId(projectId)
+    setReports([])
+    setReportsLoading(true)
+    try {
+      const [memberData, reportData] = await Promise.all([
+        readJson(await apiFetch(`/api/projects/${projectId}/members`)),
+        readJson(await apiFetch(`/api/projects/${projectId}/reports`)),
+      ])
+      if (requestId !== extrasRequestRef.current) return
+      setMembers(memberData.members ?? [])
+      setMembersProjectId(projectId)
+      setReports(reportData.reports ?? [])
+    } finally {
+      if (requestId === extrasRequestRef.current) setReportsLoading(false)
+    }
   }
 
   async function loadActivity() {
@@ -241,9 +257,17 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   }
 
   function openProject(projectId, tab = 'audit') {
+    const switchingProjects = selectedProjectId !== projectId
     setSelectedProjectId(projectId)
     setView('audit')
     setProjectTab(tab)
+    if (switchingProjects) {
+      setMembers([])
+      setMembersProjectId('')
+      setReports([])
+      setReportsProjectId(projectId)
+      setSelectedReportIds([])
+    }
     loadProjectExtras(projectId).catch((loadError) => setError(loadError.message))
   }
 
@@ -528,7 +552,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   function selectReportsOnDate(dateKey) {
     if (!dateKey) return
     setSelectedReportIds(
-      reports.filter((report) => toDateKey(report.createdAt) === dateKey).map((report) => report.id),
+      selectedProjectReports.filter((report) => toDateKey(report.createdAt) === dateKey).map((report) => report.id),
     )
   }
 
@@ -943,7 +967,9 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                       {visibleReports.length === 0 && (
                         <tr>
                           <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={canManageSelected ? 6 : 5}>
-                            {reports.length === 0
+                            {reportsLoading || reportsProjectId !== selectedProject.id
+                              ? 'Loading reports for this project...'
+                              : selectedProjectReports.length === 0
                               ? 'No reports stored yet. Run an audit to save one.'
                               : 'No reports in this date range.'}
                           </td>
