@@ -2,6 +2,7 @@ import { getJobStore } from '../lib/job-store.js'
 import { getFileStore } from '../lib/shopify-file-store.js'
 import { runAudit } from '../lib/audit-runner.js'
 import { cleanupExpiredReports } from '../lib/report-store.js'
+import { pruneActivity } from '../lib/activity-log.js'
 import { isSharedInfrastructureConfigured } from '../lib/runtime-config.js'
 
 const POLL_INTERVAL_MS = 3000
@@ -30,6 +31,9 @@ async function main() {
       lastCleanupAt = Date.now()
       await cleanupExpiredReports().catch((error) => {
         console.error('Report cleanup failed', error)
+      })
+      await pruneActivity().catch((error) => {
+        console.error('Activity log cleanup failed', error)
       })
     }
 

@@ -110,7 +110,9 @@ function GeneratedPasswordReveal({ password }) {
         </button>
       </div>
       <p className="mt-2 text-xs text-[#3C3D41]/60">
-        {copied ? 'Copied. Send it yourself — it is shown once.' : 'This is shown once. They can change it after signing in.'}
+        {copied
+          ? 'Copied. Send it yourself — it will disappear shortly.'
+          : 'Copy it now. It hides after a few seconds, or when you leave this page.'}
       </p>
     </div>
   )

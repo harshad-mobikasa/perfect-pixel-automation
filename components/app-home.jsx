@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import AuditWizard from './audit-wizard'
 import { ProjectDefaultTypography } from './typography-editor.jsx'
@@ -16,6 +16,8 @@ import {
   isAdmin,
   roleLabel,
 } from '../lib/roles.js'
+
+const GENERATED_PASSWORD_VISIBLE_MS = 8000
 
 const SUITE_LABELS = {
   pixelmatch: 'Perfect Pixel',
@@ -34,9 +36,32 @@ async function readJson(response) {
   return data
 }
 
-function formatDateTime(value) {
-  if (!value) return '—'
-  return new Date(value).toLocaleString()
+const ACTIVITY_LABELS = {
+  'user.created': 'User created',
+  'user.deleted': 'User deleted',
+  'member.added': 'Added to project',
+  'member.removed': 'Removed from project',
+  'member.assigned': 'Projects updated',
+  'member.role_changed': 'Project role changed',
+  'report.created': 'Report saved',
+  'report.deleted': 'Report deleted',
+}
+
+function toDateKey(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function inDateRange(createdAt, from, to) {
+  const key = toDateKey(createdAt)
+  if (!key) return false
+  if (from && key < from) return false
+  if (to && key > to) return false
+  return true
 }
 
 function projectRoleLabel(user, project) {
@@ -62,6 +87,11 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [generatedPassword, setGeneratedPassword] = useState('')
   const [members, setMembers] = useState([])
   const [reports, setReports] = useState([])
+  const [selectedReportIds, setSelectedReportIds] = useState([])
+  const [reportDateFrom, setReportDateFrom] = useState('')
+  const [reportDateTo, setReportDateTo] = useState('')
+  const [activityEvents, setActivityEvents] = useState([])
+  const [activityRetentionDays, setActivityRetentionDays] = useState(45)
   const [inviteForm, setInviteForm] = useState({
     name: '',
     email: '',
@@ -82,6 +112,16 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   const admin = isAdmin(user)
   const canManage = canManageUsers(user)
+
+  useEffect(() => {
+    setGeneratedPassword('')
+  }, [view, selectedProjectId, projectTab])
+
+  useEffect(() => {
+    if (!generatedPassword) return undefined
+    const timer = window.setTimeout(() => setGeneratedPassword(''), GENERATED_PASSWORD_VISIBLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [generatedPassword])
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
@@ -95,7 +135,17 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
         { value: ROLE.ADMIN, label: 'Admin' },
       ]
     : [{ value: ROLE.DEV, label: 'Dev' }]
+  const teamRoleOptions = admin
+    ? [
+        { value: ROLE.DEV, label: 'Dev' },
+        { value: ROLE.PROJECT_ADMIN, label: 'Project admin' },
+      ]
+    : [{ value: ROLE.DEV, label: 'Dev' }]
   const needsProjectAssignment = userForm.role === ROLE.DEV || userForm.role === ROLE.PROJECT_ADMIN
+  const visibleReports = useMemo(
+    () => reports.filter((report) => inDateRange(report.createdAt, reportDateFrom, reportDateTo)),
+    [reports, reportDateFrom, reportDateTo],
+  )
 
   async function refreshAdminUsers() {
     const userData = await readJson(await fetch('/api/admin/users'))
@@ -120,6 +170,22 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     ])
     setMembers(memberData.members ?? [])
     setReports(reportData.reports ?? [])
+    setSelectedReportIds([])
+  }
+
+  async function loadActivity() {
+    const data = await readJson(await fetch('/api/activity'))
+    setActivityEvents(data.events ?? [])
+    setActivityRetentionDays(data.retentionDays ?? 45)
+  }
+
+  async function openActivity() {
+    setView('activity')
+    try {
+      await loadActivity()
+    } catch (loadError) {
+      setError(loadError.message)
+    }
   }
 
   async function signOut() {
@@ -314,6 +380,26 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     }
   }
 
+  async function handleAssignUserProjects(entry, projectIds) {
+    setNotice('')
+    setError('')
+    try {
+      const data = await readJson(
+        await fetch(`/api/admin/users/${entry.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectIds }),
+        }),
+      )
+      setUsers((current) => current.map((userEntry) => (userEntry.id === data.user.id ? data.user : userEntry)))
+      await refreshProjects()
+      if (selectedProjectId) await loadProjectExtras(selectedProjectId)
+      setNotice(`Projects updated for ${entry.email}`)
+    } catch (submitError) {
+      setError(submitError.message)
+    }
+  }
+
   async function handleAssignPassword(entry) {
     if (!window.confirm(`Generate a new password for ${entry.email}? Their current password will stop working.`)) return
     setNotice('')
@@ -351,6 +437,42 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   function toggleValue(list, value) {
     return list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value]
+  }
+
+  function toggleReportSelection(reportId) {
+    setSelectedReportIds((current) => toggleValue(current, reportId))
+  }
+
+  function selectVisibleReports() {
+    setSelectedReportIds(visibleReports.map((report) => report.id))
+  }
+
+  function selectReportsOnDate(dateKey) {
+    if (!dateKey) return
+    setSelectedReportIds(
+      reports.filter((report) => toDateKey(report.createdAt) === dateKey).map((report) => report.id),
+    )
+  }
+
+  async function handleDeleteSelectedReports() {
+    if (!selectedProject || selectedReportIds.length === 0) return
+    if (!window.confirm(`Delete ${selectedReportIds.length} report(s) from this project?`)) return
+    setNotice('')
+    setError('')
+    try {
+      const data = await readJson(
+        await fetch(`/api/projects/${selectedProject.id}/reports`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runIds: selectedReportIds }),
+        }),
+      )
+      await loadProjectExtras(selectedProject.id)
+      if (canManage) await loadActivity()
+      setNotice(`${data.deleted} report(s) deleted`)
+    } catch (submitError) {
+      setError(submitError.message)
+    }
   }
 
   const tabs = [
@@ -421,6 +543,15 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                   }`}
                 >
                   Manage users
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openActivity()}
+                  className={`w-full rounded-lg px-3 py-2 text-left text-sm cursor-pointer ${
+                    view === 'activity' ? 'bg-white/15 text-white' : 'text-white/80 hover:bg-white/10'
+                  }`}
+                >
+                  Activity log
                 </button>
               </>
             )}
@@ -513,8 +644,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     <form onSubmit={handleInviteMember} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                       <h2 className="text-lg font-semibold">Invite to this project</h2>
                       <p className="text-sm text-[#3C3D41]/70">
-                        A new person is added only to this project. We generate a password for them — copy it and send
-                        it yourself. An existing person is added here without changing their password.
+                        A new person is added to the main user list and allocated only to this project. We generate a
+                        password — copy it and send it yourself. An existing person is added here without changing their
+                        password.
+                        {admin ? '' : ' Project admins can only add Dev users.'}
                       </p>
                       <div className="grid gap-4 md:grid-cols-2">
                         <label className="space-y-1">
@@ -541,8 +674,11 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             onChange={(event) => setInviteForm((current) => ({ ...current, role: event.target.value }))}
                             className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
                           >
-                            <option value={ROLE.DEV}>Dev</option>
-                            <option value={ROLE.PROJECT_ADMIN}>Project admin</option>
+                            {teamRoleOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
                           </select>
                         </label>
                       </div>
@@ -571,14 +707,17 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             <td className="px-4 py-3 font-medium">{entry.name}</td>
                             <td className="px-4 py-3">{entry.email}</td>
                             <td className="px-4 py-3">
-                              {canManageSelected && entry.id !== user.id ? (
+                              {canManageSelected && entry.id !== user.id && admin ? (
                                 <select
                                   value={entry.projectRole}
                                   onChange={(event) => handleMemberRoleChange(entry.id, event.target.value)}
                                   className="rounded-lg border border-[#3C3D41]/15 px-2 py-1"
                                 >
-                                  <option value={ROLE.DEV}>Dev</option>
-                                  <option value={ROLE.PROJECT_ADMIN}>Project admin</option>
+                                  {teamRoleOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
                                 </select>
                               ) : (
                                 roleLabel(entry.projectRole)
@@ -614,16 +753,74 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
               {projectTab === 'reports' && (
                 <div className="overflow-hidden rounded-2xl border border-[#3C3D41]/10 bg-white">
-                  <div className="border-b border-[#3C3D41]/10 px-6 py-4">
-                    <h2 className="text-lg font-semibold">Saved reports</h2>
-                    <p className="mt-1 text-sm text-[#3C3D41]/70">
-                      PDFs are stored in Shopify Files and kept on this project until the retention window ends.
-                      Current window: {selectedProject.retentionDays} days.
-                    </p>
+                  <div className="border-b border-[#3C3D41]/10 px-6 py-4 space-y-4">
+                    <div>
+                      <h2 className="text-lg font-semibold">Saved reports</h2>
+                      <p className="mt-1 text-sm text-[#3C3D41]/70">
+                        PDFs are stored in Shopify Files and kept on this project until the retention window ends.
+                        Current window: {selectedProject.retentionDays} days.
+                      </p>
+                    </div>
+                    {canManageSelected && (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <label className="space-y-1 text-sm">
+                          <span className="font-medium">From</span>
+                          <input
+                            type="date"
+                            value={reportDateFrom}
+                            onChange={(event) => setReportDateFrom(event.target.value)}
+                            className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
+                          />
+                        </label>
+                        <label className="space-y-1 text-sm">
+                          <span className="font-medium">To</span>
+                          <input
+                            type="date"
+                            value={reportDateTo}
+                            onChange={(event) => setReportDateTo(event.target.value)}
+                            className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={selectVisibleReports}
+                          className="rounded-lg border border-[#3C3D41]/15 px-3 py-2 text-sm cursor-pointer"
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectReportsOnDate(reportDateFrom || toDateKey(Date.now()))}
+                          className="rounded-lg border border-[#3C3D41]/15 px-3 py-2 text-sm cursor-pointer"
+                        >
+                          Select from date
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDeleteSelectedReports}
+                          disabled={selectedReportIds.length === 0}
+                          className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40 cursor-pointer"
+                        >
+                          Delete selected ({selectedReportIds.length})
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <table className="w-full text-left text-sm">
                     <thead className="bg-[#f7f5f2] text-xs uppercase tracking-wide text-[#3C3D41]/60">
                       <tr>
+                        {canManageSelected && (
+                          <th className="px-4 py-3">
+                            <input
+                              type="checkbox"
+                              checked={visibleReports.length > 0 && visibleReports.every((report) => selectedReportIds.includes(report.id))}
+                              onChange={(event) => {
+                                if (event.target.checked) selectVisibleReports()
+                                else setSelectedReportIds([])
+                              }}
+                            />
+                          </th>
+                        )}
                         <th className="px-4 py-3">Date</th>
                         <th className="px-4 py-3">Suite</th>
                         <th className="px-4 py-3">Run by</th>
@@ -632,8 +829,17 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                       </tr>
                     </thead>
                     <tbody>
-                      {reports.map((report) => (
+                      {visibleReports.map((report) => (
                         <tr key={report.id} className="border-t border-[#3C3D41]/10">
+                          {canManageSelected && (
+                            <td className="px-4 py-3">
+                              <input
+                                type="checkbox"
+                                checked={selectedReportIds.includes(report.id)}
+                                onChange={() => toggleReportSelection(report.id)}
+                              />
+                            </td>
+                          )}
                           <td className="px-4 py-3">{formatDateTime(report.createdAt)}</td>
                           <td className="px-4 py-3">{SUITE_LABELS[report.suite] ?? report.suite}</td>
                           <td className="px-4 py-3">
@@ -656,10 +862,12 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                           </td>
                         </tr>
                       ))}
-                      {reports.length === 0 && (
+                      {visibleReports.length === 0 && (
                         <tr>
-                          <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={5}>
-                            No reports stored yet. Run an audit to save one.
+                          <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={canManageSelected ? 6 : 5}>
+                            {reports.length === 0
+                              ? 'No reports stored yet. Run an audit to save one.'
+                              : 'No reports in this date range.'}
                           </td>
                         </tr>
                       )}
@@ -795,8 +1003,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 <h1 className="mt-1 text-2xl font-semibold">Users</h1>
                 <p className="mt-1 text-sm text-[#3C3D41]/70">
                   {admin
-                    ? 'Platform admins can create any account. Prefer inviting people from a project Team tab so they join only that project.'
-                    : 'Invite people from a project Team tab. Removing them from a project does not delete their account.'}
+                    ? 'Platform admins can create any account. Prefer inviting from a project Team tab so they join that project automatically. You can still assign projects here after create.'
+                    : 'Invite people from a project Team tab. They appear here too. Removing them from a project does not delete their account.'}
                 </p>
               </div>
 
@@ -883,12 +1091,36 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         <td className="px-4 py-3 font-medium">{entry.name}</td>
                         <td className="px-4 py-3">{entry.email}</td>
                         <td className="px-4 py-3">
-                          {isAdmin(entry)
-                            ? 'All projects'
-                            : projects
-                                .filter((project) => entry.projectIds.includes(project.id))
-                                .map((project) => `${project.name} (${roleLabel(entry.projectRoles?.[project.id] ?? ROLE.DEV)})`)
-                                .join(', ') || 'None'}
+                          {isAdmin(entry) ? (
+                            'All projects'
+                          ) : admin ? (
+                            <fieldset className="space-y-1">
+                              {projects.map((project) => (
+                                <label key={project.id} className="flex items-center gap-2 text-sm font-normal">
+                                  <input
+                                    type="checkbox"
+                                    checked={(entry.projectIds ?? []).includes(project.id)}
+                                    onChange={() =>
+                                      handleAssignUserProjects(
+                                        entry,
+                                        toggleValue(entry.projectIds ?? [], project.id),
+                                      )
+                                    }
+                                  />
+                                  {project.name}
+                                  {entry.projectRoles?.[project.id]
+                                    ? ` (${roleLabel(entry.projectRoles[project.id])})`
+                                    : ''}
+                                </label>
+                              ))}
+                              {projects.length === 0 && <span className="text-[#3C3D41]/60">No projects yet</span>}
+                            </fieldset>
+                          ) : (
+                            projects
+                              .filter((project) => (entry.projectIds ?? []).includes(project.id))
+                              .map((project) => `${project.name} (${roleLabel(entry.projectRoles?.[project.id] ?? ROLE.DEV)})`)
+                              .join(', ') || 'None'
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           {(admin || canIssueResetLink(user, entry)) && entry.id !== user.id && (
@@ -914,6 +1146,57 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {canManage && view === 'activity' && (
+            <div className="space-y-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#F58220]">
+                  {admin ? 'Admin' : 'Project admin'}
+                </p>
+                <h1 className="mt-1 text-2xl font-semibold">Activity log</h1>
+                <p className="mt-1 text-sm text-[#3C3D41]/70">
+                  User and report changes are kept for {activityRetentionDays} days.
+                  {admin ? '' : ' You only see events for projects you admin.'}
+                </p>
+              </div>
+              <div className="overflow-hidden rounded-2xl border border-[#3C3D41]/10 bg-white">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-[#f7f5f2] text-xs uppercase tracking-wide text-[#3C3D41]/60">
+                    <tr>
+                      <th className="px-4 py-3">When</th>
+                      <th className="px-4 py-3">Who</th>
+                      <th className="px-4 py-3">Action</th>
+                      <th className="px-4 py-3">Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activityEvents.map((event) => (
+                      <tr key={event.id} className="border-t border-[#3C3D41]/10">
+                        <td className="px-4 py-3">{formatDateTime(event.at)}</td>
+                        <td className="px-4 py-3">
+                          {event.actor?.name || 'Unknown'}
+                          {event.actor?.email ? ` (${event.actor.email})` : ''}
+                        </td>
+                        <td className="px-4 py-3">{ACTIVITY_LABELS[event.action] ?? event.action}</td>
+                        <td className="px-4 py-3">
+                          {event.detail}
+                          {event.target?.email ? ` · ${event.target.email}` : ''}
+                          {event.projectName ? ` · ${event.projectName}` : ''}
+                        </td>
+                      </tr>
+                    ))}
+                    {activityEvents.length === 0 && (
+                      <tr>
+                        <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={4}>
+                          No activity in the current window.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
