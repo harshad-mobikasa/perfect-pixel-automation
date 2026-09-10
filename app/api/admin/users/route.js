@@ -1,5 +1,5 @@
 import { createInvitedUser, listVisibleUsers } from '../../../../lib/account-store.js'
-import { jsonError, requireUserManager } from '../../../../lib/require-auth.js'
+import { jsonError, jsonNoStore, requireUserManager } from '../../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -10,7 +10,7 @@ export async function GET() {
 
   try {
     const users = await listVisibleUsers(auth.user)
-    return Response.json({ users })
+    return jsonNoStore({ users })
   } catch (error) {
     return jsonError(error, 500)
   }

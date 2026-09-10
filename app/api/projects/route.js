@@ -1,5 +1,5 @@
 import { createProject, listAccessibleProjects } from '../../../lib/account-store.js'
-import { jsonError, requireAdmin, requireUser } from '../../../lib/require-auth.js'
+import { jsonError, jsonNoStore, requireAdmin, requireUser } from '../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -10,7 +10,7 @@ export async function GET() {
 
   try {
     const projects = await listAccessibleProjects(auth.user)
-    return Response.json({ projects })
+    return jsonNoStore({ projects })
   } catch (error) {
     return jsonError(error, 500)
   }

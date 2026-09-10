@@ -4,7 +4,7 @@ import {
   removeProjectMember,
   updateProjectMemberRole,
 } from '../../../../../lib/account-store.js'
-import { jsonError, requireUser } from '../../../../../lib/require-auth.js'
+import { jsonError, jsonNoStore, requireUser } from '../../../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,7 +19,7 @@ export async function GET(_request, { params }) {
     return Response.json({ error: 'Project not found' }, { status: 404 })
   }
 
-  return Response.json({ members })
+  return jsonNoStore({ members })
 }
 
 export async function POST(request, { params }) {

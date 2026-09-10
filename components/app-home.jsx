@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import AuditWizard from './audit-wizard'
 import { ProjectDefaultTypography } from './typography-editor.jsx'
@@ -35,6 +35,10 @@ async function readJson(response) {
     throw new Error(data.error ?? 'Request failed')
   }
   return data
+}
+
+function apiFetch(url, options = {}) {
+  return fetch(url, { cache: 'no-store', ...options })
 }
 
 const ACTIVITY_LABELS = {
@@ -87,6 +91,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   const [generatedPassword, setGeneratedPassword] = useState('')
   const [members, setMembers] = useState([])
+  const [membersProjectId, setMembersProjectId] = useState('')
   const [reports, setReports] = useState([])
   const [selectedReportIds, setSelectedReportIds] = useState([])
   const [reportDateFrom, setReportDateFrom] = useState('')
@@ -96,6 +101,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [assignEditor, setAssignEditor] = useState(null)
   const [assignDraftIds, setAssignDraftIds] = useState([])
   const [assignSaving, setAssignSaving] = useState(false)
+  const extrasRequestRef = useRef(0)
+  const [creatingUser, setCreatingUser] = useState(false)
   const [inviteForm, setInviteForm] = useState({
     name: '',
     email: '',
@@ -151,35 +158,57 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     () => reports.filter((report) => inDateRange(report.createdAt, reportDateFrom, reportDateTo)),
     [reports, reportDateFrom, reportDateTo],
   )
+  const teamMembers = useMemo(() => {
+    if (!selectedProject) return []
+    const details = new Map()
+    if (membersProjectId === selectedProject.id) {
+      for (const entry of members) details.set(entry.id, entry)
+    }
+    for (const entry of users) details.set(entry.id, entry)
+    return (selectedProject.members ?? []).map((member) => {
+      const match = details.get(member.userId)
+      return {
+        id: member.userId,
+        name: match?.name ?? 'Unknown',
+        email: match?.email ?? '',
+        projectRole: member.role,
+      }
+    })
+  }, [selectedProject, members, membersProjectId, users])
 
   async function refreshAdminUsers() {
-    const userData = await readJson(await fetch('/api/admin/users'))
+    const userData = await readJson(await apiFetch('/api/admin/users'))
     setUsers(userData.users)
   }
 
   async function refreshProjects() {
-    const projectData = await readJson(await fetch('/api/projects'))
+    const projectData = await readJson(await apiFetch('/api/projects'))
     setProjects(projectData.projects)
   }
 
   async function loadProjectExtras(projectId) {
+    const requestId = extrasRequestRef.current + 1
+    extrasRequestRef.current = requestId
     if (!projectId) {
       setMembers([])
+      setMembersProjectId('')
       setReports([])
       return
     }
 
     const [memberData, reportData] = await Promise.all([
-      readJson(await fetch(`/api/projects/${projectId}/members`)),
-      readJson(await fetch(`/api/projects/${projectId}/reports`)),
+      readJson(await apiFetch(`/api/projects/${projectId}/members`)),
+      readJson(await apiFetch(`/api/projects/${projectId}/reports`)),
     ])
+    if (requestId !== extrasRequestRef.current) return
     setMembers(memberData.members ?? [])
+    setMembersProjectId(projectId)
     setReports(reportData.reports ?? [])
     setSelectedReportIds([])
   }
 
   async function loadActivity() {
-    const data = await readJson(await fetch('/api/activity'))
+    const data = await readJson(await apiFetch('/api/activity'))
     setActivityEvents(data.events ?? [])
     setActivityRetentionDays(data.retentionDays ?? 45)
   }
@@ -194,7 +223,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   }
 
   async function signOut() {
-    await fetch('/api/auth/logout', { method: 'POST' })
+    await apiFetch('/api/auth/logout', { method: 'POST' })
     router.replace('/login')
     router.refresh()
   }
@@ -212,7 +241,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setError('')
     try {
       const data = await readJson(
-        await fetch('/api/projects', {
+        await apiFetch('/api/projects', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -236,7 +265,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   async function handleSaveProjectConfig(config) {
     if (!selectedProject) return
     const data = await readJson(
-      await fetch(`/api/projects/${selectedProject.id}`, {
+      await apiFetch(`/api/projects/${selectedProject.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config }),
@@ -259,7 +288,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setError('')
     try {
       const data = await readJson(
-        await fetch(`/api/projects/${selectedProject.id}`, {
+        await apiFetch(`/api/projects/${selectedProject.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ retentionDays }),
@@ -280,7 +309,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setGeneratedPassword('')
     try {
       const data = await readJson(
-        await fetch(`/api/projects/${selectedProject.id}/members`, {
+        await apiFetch(`/api/projects/${selectedProject.id}/members`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(inviteForm),
@@ -306,7 +335,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setError('')
     try {
       await readJson(
-        await fetch(`/api/projects/${selectedProject.id}/members`, {
+        await apiFetch(`/api/projects/${selectedProject.id}/members`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, role }),
@@ -326,7 +355,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setError('')
     try {
       await readJson(
-        await fetch(`/api/projects/${selectedProject.id}/members?userId=${encodeURIComponent(entry.id)}`, {
+        await apiFetch(`/api/projects/${selectedProject.id}/members?userId=${encodeURIComponent(entry.id)}`, {
           method: 'DELETE',
         }),
       )
@@ -341,33 +370,46 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   async function handleCreateUser(event) {
     event.preventDefault()
+    if (creatingUser) return
     setNotice('')
     setError('')
+    setCreatingUser(true)
     try {
       const data = await readJson(
-        await fetch('/api/admin/users', {
+        await apiFetch('/api/admin/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(userForm),
         }),
       )
-      setUsers((current) => [...current, data.user])
+      setUsers((current) => {
+        if (current.some((entry) => entry.id === data.user.id)) {
+          return current.map((entry) => (entry.id === data.user.id ? data.user : entry))
+        }
+        return [...current, data.user]
+      })
       setUserForm({
         name: '',
         email: '',
         role: ROLE.DEV,
         projectIds: [],
       })
-      if (data.temporaryPassword) setGeneratedPassword(data.temporaryPassword)
-      await refreshAdminUsers()
-      await refreshProjects()
-      setNotice(
-        data.temporaryPassword
-          ? `${data.user.email} was created. Copy the generated password below and send it to them yourself.`
-          : 'User created',
-      )
+      if (data.temporaryPassword) {
+        setGeneratedPassword(data.temporaryPassword)
+        setNotice(
+          `${data.user.email} was created. Copy the generated password below and send it to them yourself.`,
+        )
+      } else if (data.created === false) {
+        setNotice(`${data.user.email} already exists and was assigned to the selected projects.`)
+      } else {
+        setNotice('User created')
+      }
+      refreshAdminUsers().catch((loadError) => setError(loadError.message))
+      refreshProjects().catch((loadError) => setError(loadError.message))
     } catch (submitError) {
       setError(submitError.message)
+    } finally {
+      setCreatingUser(false)
     }
   }
 
@@ -376,7 +418,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setNotice('')
     setError('')
     try {
-      await readJson(await fetch(`/api/admin/users/${entry.id}`, { method: 'DELETE' }))
+      await readJson(await apiFetch(`/api/admin/users/${entry.id}`, { method: 'DELETE' }))
       setUsers((current) => current.filter((userEntry) => userEntry.id !== entry.id))
       await refreshProjects()
       setNotice('User deleted')
@@ -391,18 +433,32 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setAssignSaving(true)
     try {
       const data = await readJson(
-        await fetch(`/api/admin/users/${entry.id}`, {
+        await apiFetch(`/api/admin/users/${entry.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectIds }),
         }),
       )
-      setUsers((current) => current.map((userEntry) => (userEntry.id === data.user.id ? data.user : userEntry)))
-      await refreshAdminUsers()
-      await refreshProjects()
-      if (selectedProjectId) await loadProjectExtras(selectedProjectId)
+      const saved = data.user
+      setUsers((current) => current.map((userEntry) => (userEntry.id === saved.id ? saved : userEntry)))
+      setProjects((current) =>
+        current.map((project) => {
+          const nextMembers = (project.members ?? []).filter((member) => member.userId !== saved.id)
+          if ((saved.projectIds ?? []).includes(project.id)) {
+            const existing = (project.members ?? []).find((member) => member.userId === saved.id)
+            nextMembers.push({ userId: saved.id, role: existing?.role ?? ROLE.DEV })
+          }
+          return {
+            ...project,
+            members: nextMembers,
+            memberIds: nextMembers.map((member) => member.userId),
+          }
+        }),
+      )
       setAssignEditor(null)
       setNotice(`Projects updated for ${entry.email}`)
+      refreshAdminUsers().catch((loadError) => setError(loadError.message))
+      refreshProjects().catch((loadError) => setError(loadError.message))
     } catch (submitError) {
       setError(submitError.message)
     } finally {
@@ -417,7 +473,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setGeneratedPassword('')
     try {
       const data = await readJson(
-        await fetch(`/api/admin/users/${entry.id}/password`, { method: 'POST' }),
+        await apiFetch(`/api/admin/users/${entry.id}/password`, { method: 'POST' }),
       )
       setGeneratedPassword(data.temporaryPassword)
       setNotice(`New password generated for ${entry.email}. Copy it below and send it to them yourself.`)
@@ -432,7 +488,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setError('')
     try {
       await readJson(
-        await fetch('/api/auth/change-password', {
+        await apiFetch('/api/auth/change-password', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(passwordForm),
@@ -471,7 +527,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setError('')
     try {
       const data = await readJson(
-        await fetch(`/api/projects/${selectedProject.id}/reports`, {
+        await apiFetch(`/api/projects/${selectedProject.id}/reports`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ runIds: selectedReportIds }),
@@ -712,7 +768,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         </tr>
                       </thead>
                       <tbody>
-                        {members.map((entry) => (
+                        {teamMembers.map((entry) => (
                           <tr key={entry.id} className="border-t border-[#3C3D41]/10">
                             <td className="px-4 py-3 font-medium">{entry.name}</td>
                             <td className="px-4 py-3">{entry.email}</td>
@@ -748,7 +804,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             )}
                           </tr>
                         ))}
-                        {members.length === 0 && (
+                        {teamMembers.length === 0 && (
                           <tr>
                             <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={canManageSelected ? 4 : 3}>
                               No project members yet.
@@ -1068,9 +1124,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                   )}
                   <button
                     type="submit"
-                    className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                    disabled={creatingUser}
+                    className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer disabled:opacity-40"
                   >
-                    Create user
+                    {creatingUser ? 'Creating…' : 'Create user'}
                   </button>
                 </form>
               )}
