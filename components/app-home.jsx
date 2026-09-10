@@ -61,6 +61,15 @@ function toDateKey(value) {
   return `${year}-${month}-${day}`
 }
 
+function formatDateTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown'
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
+}
+
 function inDateRange(createdAt, from, to) {
   const key = toDateKey(createdAt)
   if (!key) return false
@@ -125,8 +134,11 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const canManage = canManageUsers(user)
 
   useEffect(() => {
-    setGeneratedPassword('')
-    setAssignEditor(null)
+    const timer = window.setTimeout(() => {
+      setGeneratedPassword('')
+      setAssignEditor(null)
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [view, selectedProjectId, projectTab])
 
   useEffect(() => {

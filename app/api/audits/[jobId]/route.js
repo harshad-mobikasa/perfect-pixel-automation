@@ -17,7 +17,13 @@ export async function GET(_request, { params }) {
     return Response.json({ error: 'Job not found' }, { status: 404 })
   }
 
-  const queue = job.status === 'queued' ? await jobStore.getQueuePosition(jobId) : null
+  let queue = job.status === 'queued' ? await jobStore.getQueuePosition(jobId) : null
+  if (job.status === 'queued' && !queue?.position && typeof jobStore.ensureQueuedJob === 'function') {
+    const repaired = await jobStore.ensureQueuedJob(jobId)
+    if (repaired) {
+      queue = await jobStore.getQueuePosition(jobId)
+    }
+  }
 
   return jsonNoStore({
     status: job.status,

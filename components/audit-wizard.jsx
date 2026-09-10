@@ -222,6 +222,14 @@ function queueStatusText(status, queuePosition, waitingAhead, runningCount) {
   return 'Starting this audit. The worker will pick it up in a moment.'
 }
 
+function hasReportFiles(job) {
+  return Array.isArray(job?.reportFiles) && job.reportFiles.length > 0
+}
+
+function shouldKeepLocalJob(job) {
+  return job?.status === 'queued' || job?.status === 'running' || job?.status === 'failed' || (job?.status === 'done' && !hasReportFiles(job))
+}
+
 export default function AuditWizard({ project, onSaveConfig }) {
   const [url, setUrl] = useState(project?.config?.url ?? '')
   const [activeSuite, setActiveSuite] = useState(null)
@@ -244,7 +252,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const [myJobs, setMyJobs] = useState([])
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [finishedSeenAt, setFinishedSeenAt] = useState({})
-  const [nowTick, setNowTick] = useState(Date.now())
+  const [nowTick, setNowTick] = useState(0)
   const [starting, setStarting] = useState(false)
   const startRef = useRef(null)
   const pollRef = useRef(null)
@@ -255,19 +263,30 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const isTypography = activeSuite === 'typography'
   const visibleJobs = myJobs.filter((job) => {
     if (job.status === 'queued' || job.status === 'running') return true
+    if (job.status === 'failed') return true
+    if (job.status === 'done' && !hasReportFiles(job)) return true
     const seenAt = finishedSeenAt[job.id]
     if (!seenAt) return true
     return nowTick - seenAt < COLLAPSE_FINISHED_MS
   })
-  const visibleJobKey = visibleJobs.map((job) => job.id).join('|')
-  const selectedJob = visibleJobs.find((job) => job.id === selectedJobId) ?? null
-  const isRunning = selectedJob?.status === 'queued' || selectedJob?.status === 'running'
+  const effectiveSelectedJobId = selectedJobId ?? visibleJobs[0]?.id ?? null
+  const selectedJob = visibleJobs.find((job) => job.id === effectiveSelectedJobId) ?? null
+  const displayStatus = selectedJob?.status ?? status
+  const displayError = selectedJob?.error ?? jobError
+  const displayStage = selectedJob?.stage ?? jobStage
+  const displayProgress = selectedJob?.progress ?? jobProgress
+  const displayLastMessage = selectedJob?.lastMessage ?? jobLastMessage
+  const displayQueuePosition = selectedJob?.queuePosition ?? queuePosition
+  const displayWaitingAhead = selectedJob?.waitingAhead ?? waitingAhead
+  const displayRunningCount = selectedJob?.runningCount ?? runningCount
+  const displayReportFiles = Array.isArray(selectedJob?.reportFiles) ? selectedJob.reportFiles : reportFiles
+  const isRunning = displayStatus === 'queued' || displayStatus === 'running'
   const showRunTabs = visibleJobs.length > 1
   const selectedIsQueuedBehind = selectedJob ? isBehindOthers(selectedJob) : false
-  const estSec = SUITES.find((suite) => suite.id === activeSuite)?.estSec ?? 120
+  const estSec = SUITES.find((suite) => suite.id === (selectedJob?.suite ?? activeSuite))?.estSec ?? 120
   const remaining = Math.max(0, estSec - elapsed)
   const fallbackPct = Math.min(95, Math.round((elapsed / estSec) * 100))
-  const pct = jobProgress ?? fallbackPct
+  const pct = displayProgress ?? fallbackPct
   const steps = ['url', 'suite', 'pages', ...(isPixelmatch || isResponsive || isTypography ? ['config'] : []), 'review']
   const effectiveStepIndex = Math.min(stepIndex, steps.length - 1)
   const currentStep = steps[effectiveStepIndex] ?? 'url'
@@ -371,18 +390,36 @@ export default function AuditWizard({ project, onSaveConfig }) {
   }
 
   function startNewAudit() {
-    setSelectedJobId(null)
-    resetJobState()
-    clearStoredJob(project?.id)
     setStepIndex(0)
+  }
+
+  function clearJobStatus(jobIdToClear) {
+    setMyJobs((current) => current.filter((job) => job.id !== jobIdToClear))
+    if (effectiveSelectedJobId === jobIdToClear || jobId === jobIdToClear) {
+      setSelectedJobId(null)
+      resetJobState()
+      clearStoredJob(project?.id)
+    }
   }
 
   async function refreshMyJobs() {
     if (!project?.id) return []
     const res = await fetch(`/api/audits?projectId=${encodeURIComponent(project.id)}`, { cache: 'no-store' })
     const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setJobError(data.error ?? `Could not refresh audit status (${res.status})`)
+      return myJobs
+    }
     const jobs = Array.isArray(data.jobs) ? data.jobs : []
-    setMyJobs(jobs)
+    setMyJobs((current) => {
+      const merged = [...jobs]
+      for (const job of current) {
+        if (shouldKeepLocalJob(job) && !merged.some((nextJob) => nextJob.id === job.id)) {
+          merged.push(job)
+        }
+      }
+      return merged
+    })
     setFinishedSeenAt((current) => {
       const next = { ...current }
       for (const job of jobs) {
@@ -392,12 +429,15 @@ export default function AuditWizard({ project, onSaveConfig }) {
       }
       return next
     })
+    const selectedFreshJob = jobs.find((job) => job.id === selectedJobId)
+    if (selectedFreshJob) applyJobSnapshot(selectedFreshJob)
     return jobs
   }
 
   function collapseHint(job) {
-    if (job.status !== 'done' && job.status !== 'failed') return null
+    if (job.status !== 'done' || !hasReportFiles(job)) return null
     const seenAt = finishedSeenAt[job.id]
+    if (!nowTick) return 'Hides soon'
     if (!seenAt) return 'Hides soon'
     const left = Math.max(0, Math.ceil((COLLAPSE_FINISHED_MS - (nowTick - seenAt)) / 1000))
     return `Hides in ${left}s`
@@ -703,7 +743,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
         waitingAhead: 0,
         runningCount: 0,
         reportFiles: [],
+        createdAt: Date.now(),
       }
+      setMyJobs((current) => [queued, ...current.filter((job) => job.id !== queued.id)])
       selectJob(queued)
       await refreshMyJobs()
     } catch (error) {
@@ -790,7 +832,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
       if (cancelled || !initial) return
       const stored = readStoredJob(project.id)
       const active = jobs.find((job) => job.status === 'queued' || job.status === 'running')
-      const pick = jobs.find((job) => job.id === stored?.jobId) ?? active ?? null
+      const needsAttention = jobs.find((job) => job.status === 'failed' || (job.status === 'done' && !hasReportFiles(job)))
+      const pick = jobs.find((job) => job.id === stored?.jobId) ?? active ?? needsAttention ?? null
       if (pick) selectJob(pick)
     }
 
@@ -805,22 +848,9 @@ export default function AuditWizard({ project, onSaveConfig }) {
     }
   }, [project?.id])
 
-  useEffect(() => {
-    if (!selectedJob) return
-    applyJobSnapshot(selectedJob)
-  }, [selectedJob])
-
-  useEffect(() => {
-    if (!selectedJobId) return
-    if (visibleJobKey.split('|').includes(selectedJobId)) return
-    setSelectedJobId(null)
-    resetJobState()
-    clearStoredJob(project?.id)
-  }, [visibleJobKey, selectedJobId, project?.id])
-
   function downloadPdf(fileName) {
     const suffix = fileName ? `?file=${encodeURIComponent(fileName)}` : ''
-    window.open(`/api/audits/${jobId}/download${suffix}`, '_self')
+    window.open(`/api/audits/${selectedJob?.id ?? jobId}/download${suffix}`, '_self')
   }
 
   function goNext() {
@@ -926,7 +956,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
       {typeof saveState === 'string' && saveState !== 'saving' && saveState !== 'saved' && (
         <p className="text-sm text-red-600">{saveState}</p>
       )}
-      {!selectedJobId && jobError && (
+      {!effectiveSelectedJobId && jobError && (
         <p className="text-sm text-red-600">{jobError}</p>
       )}
 
@@ -939,7 +969,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Your runs</h2>
                   <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                     Audits you started in this project. Queue numbers appear only when someone is ahead of a run.
-                    Finished and failed tabs hide after 45 seconds.
+                    Successful runs hide after 45 seconds; errors stay visible until you clear them.
                   </p>
                 </div>
                 <button
@@ -952,7 +982,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {visibleJobs.map((job) => {
-                  const selected = job.id === selectedJobId
+                  const selected = job.id === effectiveSelectedJobId
                   const failed = job.status === 'failed'
                   return (
                     <button
@@ -990,11 +1020,11 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     <div className="flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-[#F58220] animate-pulse" />
                       <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                        {status === 'queued'
+                        {displayStatus === 'queued'
                           ? selectedIsQueuedBehind
-                            ? jobStage ?? 'Waiting in queue…'
+                            ? displayStage ?? 'Waiting in queue...'
                             : 'Starting…'
-                          : jobStage ?? `Running ${suiteLabel(selectedJob.suite)}…`}
+                          : displayStage ?? `Running ${suiteLabel(selectedJob.suite)}...`}
                       </span>
                     </div>
                     <span className="text-xs text-zinc-500 dark:text-zinc-400">{elapsed}s elapsed</span>
@@ -1005,12 +1035,12 @@ export default function AuditWizard({ project, onSaveConfig }) {
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  {selectedIsQueuedBehind && jobLastMessage && (
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Latest update: {jobLastMessage}</p>
+                  {selectedIsQueuedBehind && displayLastMessage && (
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Latest update: {displayLastMessage}</p>
                   )}
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
-                    {status === 'queued'
-                      ? queueStatusText(status, queuePosition, waitingAhead, runningCount)
+                    {displayStatus === 'queued'
+                      ? queueStatusText(displayStatus, displayQueuePosition, displayWaitingAhead, displayRunningCount)
                       : remaining > 0
                         ? `Typical remaining time: ${fmtTime(remaining)}`
                         : 'This run is taking longer than usual, but it is still working.'}
@@ -1018,15 +1048,15 @@ export default function AuditWizard({ project, onSaveConfig }) {
                 </div>
               )}
 
-              {status === 'done' && (
+              {displayStatus === 'done' && (
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-green-600 dark:text-green-400">Audit complete.</p>
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
                     Download below, or open the project <span className="font-medium">Reports</span> tab.
                   </p>
                   <div className="flex flex-wrap gap-3">
-                    {reportFiles.length > 1 ? (
-                      reportFiles.map((file) => (
+                    {displayReportFiles.length > 1 ? (
+                      displayReportFiles.map((file) => (
                         <button
                           key={file.fileName}
                           type="button"
@@ -1045,20 +1075,36 @@ export default function AuditWizard({ project, onSaveConfig }) {
                         Download PDF report
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => clearJobStatus(selectedJob.id)}
+                      className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
+                    >
+                      Clear status
+                    </button>
                   </div>
                 </div>
               )}
 
-              {status === 'failed' && (
+              {displayStatus === 'failed' && (
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-red-600 dark:text-red-400">This audit did not finish</p>
                   <p className="text-sm text-zinc-800 dark:text-zinc-100 break-words">
-                    {jobError || 'The worker reported a failure, but no extra error text was saved.'}
+                    {displayError || 'The worker reported a failure, but no extra error text was saved.'}
                   </p>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    Nothing was saved to Reports for this run. This status hides after 45 seconds. You can start
-                    another audit without waiting.
+                    Nothing was saved to Reports for this run. This status stays here until you clear it. You can
+                    start another audit without waiting.
                   </p>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => clearJobStatus(selectedJob.id)}
+                      className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
+                    >
+                      Clear status
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

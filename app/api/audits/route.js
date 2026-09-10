@@ -18,7 +18,7 @@ const QUEUE_CAP = 20
 
 async function summarizeUserJobs(jobStore, userId, projectId) {
   const jobs = await jobStore.listJobsForUser(userId, projectId)
-  const live = typeof jobStore.compactPendingQueue === 'function' ? await jobStore.compactPendingQueue() : null
+  const live = typeof jobStore.listPendingQueue === 'function' ? await jobStore.listPendingQueue() : null
   const runningCount =
     typeof jobStore.getRunningCount === 'function'
       ? await jobStore.getRunningCount()
@@ -30,7 +30,11 @@ async function summarizeUserJobs(jobStore, userId, projectId) {
     let queue = { position: null, waitingAhead: 0, runningCount }
     if (job.status === 'queued') {
       if (Array.isArray(live)) {
-        const index = live.indexOf(job.id)
+        let index = live.indexOf(job.id)
+        if (index === -1 && typeof jobStore.ensureQueuedJob === 'function' && (await jobStore.ensureQueuedJob(job.id))) {
+          live.push(job.id)
+          index = live.length - 1
+        }
         queue =
           index === -1
             ? { position: null, waitingAhead: 0, runningCount }
