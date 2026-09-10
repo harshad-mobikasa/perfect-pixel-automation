@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Mobikasa audit tool
 
-## Getting Started
+Two parts:
 
-First, run the development server:
+1. **Website** — login, users, run audits, download PDFs. Deploy on **Vercel**.
+2. **Worker** — actually runs the tests. Run on a **server or your laptop**. Not on Vercel.
+
+## Local
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Fill `.env`, then:
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+In a second terminal:
 
-## Learn More
+```bash
+npm run worker
+```
 
-To learn more about Next.js, take a look at the following resources:
+Open http://localhost:3000
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Production
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Same two parts, on two machines:
 
-## Deploy on Vercel
+**1. Website — Vercel**
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Push this repo to GitHub and import it in Vercel.
+- In Vercel → Settings → Environment Variables, add the same keys as `.env` (`AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, Redis, Shopify, `NPM_TOKEN` if the build needs it).
+- Deploy. People open the Vercel URL to log in and start audits.
+- Do **not** run `npm run worker` on Vercel.
+- Do **not** add `APP_ROLE` on Vercel. That variable is only for Docker. Vercel always runs the website.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**2. Worker — your server (Docker)**
+
+- Put the same env vars on that server.
+- Set `APP_ROLE=worker`.
+- Start/restart the container.
+
+Audits only run while this worker is up. Website on Vercel talks to Redis; the worker reads jobs from Redis and saves PDFs to Shopify.
+
+If the worker is stopped, the site still works, but new audits will sit in the queue until you start it again.
+
+## New audit-kit version
+
+Publish the kit to npm, then **restart the worker**.
+
+```bash
+npm run worker
+```
+
+That is all. It downloads the latest kit by itself.
+
+On the worker server: restart the Docker container (`APP_ROLE=worker`).
+
+You do not need to change `package.json` or push Vercel for a kit-only update.
+
+## New npm token
+
+Put the new `NPM_TOKEN` in:
+
+- laptop `.env`
+- worker server env
+- Vercel env (if the Vercel build installs packages)
+
+Then restart the worker. Do not commit the token.
+
+## Free limits
+
+**Redis (Upstash free):** about 256 MB and 500,000 commands per month.  
+We only store users, jobs, and report lists there. Jobs drop after 24 hours. Activity drops after 45 days. Report lists follow the project retention (default 30 days).
+
+**PDFs** are in Shopify Files, not Redis. Old PDFs are deleted when retention ends. Use a shorter retention in project Settings if storage is high.
+
+If Redis is full, login and audits can break. Check the Upstash dashboard.
