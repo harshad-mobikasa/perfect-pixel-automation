@@ -28,14 +28,13 @@ export async function POST(request) {
   }
 
   try {
-    const user = await createInvitedUser(auth.user, {
+    const result = await createInvitedUser(auth.user, {
       email: body?.email,
-      password: body?.password,
       name: body?.name,
       role: body?.role,
       projectIds: body?.projectIds,
     })
-    return Response.json({ user }, { status: 201 })
+    return Response.json(result, { status: 201 })
   } catch (error) {
     return jsonError(error)
   }

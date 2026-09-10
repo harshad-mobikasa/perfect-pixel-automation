@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import AuditWizard from './audit-wizard'
 import { ProjectDefaultTypography } from './typography-editor.jsx'
+import { PasswordField } from './password-field.jsx'
 import {
   RETENTION_OPTIONS,
   ROLE,
@@ -58,22 +59,25 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [projectName, setProjectName] = useState('')
   const [projectMemberIds, setProjectMemberIds] = useState([])
 
-  const [resetLink, setResetLink] = useState('')
+  const [generatedPassword, setGeneratedPassword] = useState('')
   const [members, setMembers] = useState([])
   const [reports, setReports] = useState([])
   const [inviteForm, setInviteForm] = useState({
     name: '',
     email: '',
-    password: '',
     role: ROLE.DEV,
   })
 
   const [userForm, setUserForm] = useState({
     name: '',
     email: '',
-    password: '',
     role: ROLE.DEV,
     projectIds: [],
+  })
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    password: '',
+    confirmPassword: '',
   })
 
   const admin = isAdmin(user)
@@ -202,6 +206,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     if (!selectedProject) return
     setNotice('')
     setError('')
+    setGeneratedPassword('')
     try {
       const data = await readJson(
         await fetch(`/api/projects/${selectedProject.id}/members`, {
@@ -210,13 +215,14 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
           body: JSON.stringify(inviteForm),
         }),
       )
-      setInviteForm({ name: '', email: '', password: '', role: ROLE.DEV })
+      setInviteForm({ name: '', email: '', role: ROLE.DEV })
+      if (data.temporaryPassword) setGeneratedPassword(data.temporaryPassword)
       await refreshProjects()
       await loadProjectExtras(selectedProject.id)
       if (canManage) await refreshAdminUsers()
       setNotice(
         data.created
-          ? `${data.user.email} was added to the system and this project only.`
+          ? `${data.user.email} was added. Copy the generated password below and send it to them yourself.`
           : `${data.user.email} was added to this project.`,
       )
     } catch (submitError) {
@@ -278,13 +284,17 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       setUserForm({
         name: '',
         email: '',
-        password: '',
         role: ROLE.DEV,
         projectIds: [],
       })
+      if (data.temporaryPassword) setGeneratedPassword(data.temporaryPassword)
       await refreshAdminUsers()
       await refreshProjects()
-      setNotice('User created')
+      setNotice(
+        data.temporaryPassword
+          ? `${data.user.email} was created. Copy the generated password below and send it to them yourself.`
+          : 'User created',
+      )
     } catch (submitError) {
       setError(submitError.message)
     }
@@ -304,16 +314,36 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     }
   }
 
-  async function handleResetLink(entry) {
+  async function handleAssignPassword(entry) {
+    if (!window.confirm(`Generate a new password for ${entry.email}? Their current password will stop working.`)) return
     setNotice('')
     setError('')
-    setResetLink('')
+    setGeneratedPassword('')
     try {
       const data = await readJson(
-        await fetch(`/api/admin/users/${entry.id}/reset-link`, { method: 'POST' }),
+        await fetch(`/api/admin/users/${entry.id}/password`, { method: 'POST' }),
       )
-      setResetLink(data.resetUrl)
-      setNotice(`Reset link created for ${entry.email}. It expires in 1 hour.`)
+      setGeneratedPassword(data.temporaryPassword)
+      setNotice(`New password generated for ${entry.email}. Copy it below and send it to them yourself.`)
+    } catch (submitError) {
+      setError(submitError.message)
+    }
+  }
+
+  async function handleChangeOwnPassword(event) {
+    event.preventDefault()
+    setNotice('')
+    setError('')
+    try {
+      await readJson(
+        await fetch('/api/auth/change-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(passwordForm),
+        }),
+      )
+      setPasswordForm({ currentPassword: '', password: '', confirmPassword: '' })
+      setNotice('Your password was updated')
     } catch (submitError) {
       setError(submitError.message)
     }
@@ -394,6 +424,18 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 </button>
               </>
             )}
+            <p className="px-2 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/40">
+              You
+            </p>
+            <button
+              type="button"
+              onClick={() => setView('account')}
+              className={`w-full rounded-lg px-3 py-2 text-left text-sm cursor-pointer ${
+                view === 'account' ? 'bg-white/15 text-white' : 'text-white/80 hover:bg-white/10'
+              }`}
+            >
+              Account
+            </button>
           </nav>
 
           <div className="border-t border-white/10 px-5 py-4">
@@ -420,6 +462,13 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
           {notice && (
             <div className="mb-4 rounded-xl border border-[#F58220]/20 bg-white px-4 py-3 text-sm text-[#3C3D41]">
               {notice}
+            </div>
+          )}
+          {generatedPassword && (
+            <div className="mb-4 rounded-xl border border-[#F58220]/30 bg-white px-4 py-3 text-sm">
+              <p className="font-medium">Generated password — send this yourself</p>
+              <p className="mt-2 break-all font-mono text-[#3C3D41]">{generatedPassword}</p>
+              <p className="mt-2 text-xs text-[#3C3D41]/60">This is shown once. They can change it after signing in.</p>
             </div>
           )}
 
@@ -470,9 +519,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     <form onSubmit={handleInviteMember} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                       <h2 className="text-lg font-semibold">Invite to this project</h2>
                       <p className="text-sm text-[#3C3D41]/70">
-                        A new email is created as a user in the system and added only to this project. An existing
-                        person is added here without changing their other projects. The same person can be Dev on one
-                        project and Project admin on another.
+                        A new person is added only to this project. We generate a password for them — copy it and send
+                        it yourself. An existing person is added here without changing their password.
                       </p>
                       <div className="grid gap-4 md:grid-cols-2">
                         <label className="space-y-1">
@@ -491,18 +539,6 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             onChange={(event) => setInviteForm((current) => ({ ...current, email: event.target.value }))}
                             className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
                           />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm font-medium">Temporary password</span>
-                          <input
-                            type="password"
-                            value={inviteForm.password}
-                            onChange={(event) =>
-                              setInviteForm((current) => ({ ...current, password: event.target.value }))
-                            }
-                            className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                          />
-                          <span className="text-xs text-[#3C3D41]/60">Required only if this email is new.</span>
                         </label>
                         <label className="space-y-1">
                           <span className="text-sm font-medium">Role on this project</span>
@@ -770,13 +806,6 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 </p>
               </div>
 
-              {resetLink && (
-                <div className="rounded-2xl border border-[#F58220]/30 bg-white p-4 text-sm">
-                  <p className="font-medium">One-hour reset link</p>
-                  <p className="mt-2 break-all text-[#3C3D41]/80">{resetLink}</p>
-                </div>
-              )}
-
               {admin && (
                 <form onSubmit={handleCreateUser} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                   <h2 className="text-lg font-semibold">Create user</h2>
@@ -795,15 +824,6 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         type="email"
                         value={userForm.email}
                         onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
-                        className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-sm font-medium">Temporary password</span>
-                      <input
-                        type="password"
-                        value={userForm.password}
-                        onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
                         className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
                       />
                     </label>
@@ -881,10 +901,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             <div className="flex flex-wrap gap-3">
                               <button
                                 type="button"
-                                onClick={() => handleResetLink(entry)}
+                                onClick={() => handleAssignPassword(entry)}
                                 className="text-[#F58220] hover:underline cursor-pointer"
                               >
-                                Reset link
+                                New password
                               </button>
                               {admin && (
                                 <button
@@ -903,6 +923,50 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {view === 'account' && (
+            <div className="space-y-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#F58220]">Account</p>
+                <h1 className="mt-1 text-2xl font-semibold">Change password</h1>
+                <p className="mt-1 text-sm text-[#3C3D41]/70">
+                  There is no forgot-password email. After you are signed in, you can set a new password here. An
+                  admin can generate a new password for someone else and send it manually.
+                </p>
+              </div>
+              <form onSubmit={handleChangeOwnPassword} className="max-w-md rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
+                <PasswordField
+                  className="mt-0"
+                  label="Current password"
+                  autoComplete="current-password"
+                  value={passwordForm.currentPassword}
+                  onChange={(event) =>
+                    setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))
+                  }
+                />
+                <PasswordField
+                  label="New password"
+                  autoComplete="new-password"
+                  value={passwordForm.password}
+                  onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))}
+                />
+                <PasswordField
+                  label="Confirm new password"
+                  autoComplete="new-password"
+                  value={passwordForm.confirmPassword}
+                  onChange={(event) =>
+                    setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))
+                  }
+                />
+                <button
+                  type="submit"
+                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                >
+                  Update password
+                </button>
+              </form>
             </div>
           )}
         </main>

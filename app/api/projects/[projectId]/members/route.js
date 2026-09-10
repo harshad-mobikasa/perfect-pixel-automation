@@ -38,7 +38,6 @@ export async function POST(request, { params }) {
     const result = await inviteProjectMember(auth.user, projectId, {
       email: body?.email,
       name: body?.name,
-      password: body?.password,
       role: body?.role,
     })
     return Response.json(result, { status: result.created ? 201 : 200 })
