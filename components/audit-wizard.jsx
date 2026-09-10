@@ -184,6 +184,28 @@ function clearStoredJob(projectId) {
   window.sessionStorage.removeItem(jobStorageKey(projectId))
 }
 
+function dismissedJobsStorageKey(projectId) {
+  return `audit-dismissed-jobs:${projectId}`
+}
+
+function readDismissedJobIds(projectId) {
+  if (!projectId || typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.sessionStorage.getItem(dismissedJobsStorageKey(projectId))
+    const parsed = JSON.parse(raw)
+    return new Set(Array.isArray(parsed) ? parsed : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function dismissStoredJob(projectId, jobId) {
+  if (!projectId || !jobId || typeof window === 'undefined') return
+  const dismissed = readDismissedJobIds(projectId)
+  dismissed.add(jobId)
+  window.sessionStorage.setItem(dismissedJobsStorageKey(projectId), JSON.stringify([...dismissed]))
+}
+
 function suiteLabel(suiteId) {
   return SUITES.find((suite) => suite.id === suiteId)?.label ?? suiteId ?? 'Audit'
 }
@@ -412,6 +434,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   }
 
   function clearJobStatus(jobIdToClear) {
+    dismissStoredJob(project?.id, jobIdToClear)
     setMyJobs((current) => current.filter((job) => job.id !== jobIdToClear))
     if (effectiveSelectedJobId === jobIdToClear || jobId === jobIdToClear) {
       setSelectedJobId(null)
@@ -428,10 +451,12 @@ export default function AuditWizard({ project, onSaveConfig }) {
       setJobError(data.error ?? `Could not refresh audit status (${res.status})`)
       return myJobs
     }
-    const jobs = Array.isArray(data.jobs) ? data.jobs : []
+    const dismissedJobIds = readDismissedJobIds(project.id)
+    const jobs = (Array.isArray(data.jobs) ? data.jobs : []).filter((job) => !dismissedJobIds.has(job.id))
     setMyJobs((current) => {
       const merged = [...jobs]
       for (const job of current) {
+        if (dismissedJobIds.has(job.id)) continue
         if (shouldKeepLocalJob(job) && !merged.some((nextJob) => nextJob.id === job.id)) {
           merged.push(job)
         }

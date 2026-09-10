@@ -176,6 +176,9 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     () => selectedProjectReports.filter((report) => inDateRange(report.createdAt, reportDateFrom, reportDateTo)),
     [selectedProjectReports, reportDateFrom, reportDateTo],
   )
+  const reportsReadyForSelectedProject = Boolean(
+    selectedProject && !reportsLoading && reportsProjectId === selectedProject.id,
+  )
   const teamMembers = useMemo(() => {
     if (!selectedProject) return []
     const details = new Map()
@@ -266,6 +269,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       setMembersProjectId('')
       setReports([])
       setReportsProjectId(projectId)
+      setReportsLoading(true)
       setSelectedReportIds([])
     }
     loadProjectExtras(projectId).catch((loadError) => setError(loadError.message))
@@ -931,7 +935,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                       </tr>
                     </thead>
                     <tbody>
-                      {visibleReports.map((report) => (
+                      {reportsReadyForSelectedProject && visibleReports.map((report) => (
                         <tr key={report.id} className="border-t border-[#3C3D41]/10">
                           {canManageSelected && (
                             <td className="px-4 py-3">
@@ -964,10 +968,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                           </td>
                         </tr>
                       ))}
-                      {visibleReports.length === 0 && (
+                      {(!reportsReadyForSelectedProject || visibleReports.length === 0) && (
                         <tr>
                           <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={canManageSelected ? 6 : 5}>
-                            {reportsLoading || reportsProjectId !== selectedProject.id
+                            {!reportsReadyForSelectedProject
                               ? 'Loading reports for this project...'
                               : selectedProjectReports.length === 0
                               ? 'No reports stored yet. Run an audit to save one.'
