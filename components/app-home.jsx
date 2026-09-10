@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import AuditWizard from './audit-wizard'
 import { ProjectDefaultTypography } from './typography-editor.jsx'
-import { PasswordField } from './password-field.jsx'
+import { GeneratedPasswordReveal, PasswordField } from './password-field.jsx'
 import {
   RETENTION_OPTIONS,
   ROLE,
@@ -464,13 +464,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
               {notice}
             </div>
           )}
-          {generatedPassword && (
-            <div className="mb-4 rounded-xl border border-[#F58220]/30 bg-white px-4 py-3 text-sm">
-              <p className="font-medium">Generated password — send this yourself</p>
-              <p className="mt-2 break-all font-mono text-[#3C3D41]">{generatedPassword}</p>
-              <p className="mt-2 text-xs text-[#3C3D41]/60">This is shown once. They can change it after signing in.</p>
-            </div>
-          )}
+          {generatedPassword && <GeneratedPasswordReveal key={generatedPassword} password={generatedPassword} />}
 
           {view === 'audit' && selectedProject && (
             <div className="space-y-6">
