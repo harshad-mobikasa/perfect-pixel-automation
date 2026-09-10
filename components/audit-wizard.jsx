@@ -188,10 +188,19 @@ function suiteLabel(suiteId) {
   return SUITES.find((suite) => suite.id === suiteId)?.label ?? suiteId ?? 'Audit'
 }
 
+function isBehindOthers(job) {
+  const waitingAhead = job?.waitingAhead ?? 0
+  const queuePosition = job?.queuePosition ?? 0
+  const runningCount = job?.runningCount ?? 0
+  return waitingAhead > 0 || queuePosition > 1 || runningCount > 0
+}
+
 function tabLabel(job) {
   const name = suiteLabel(job.suite)
   if (job.status === 'queued') {
-    return job.queuePosition ? `${name} · #${job.queuePosition}` : `${name} · queued`
+    if (isBehindOthers(job) && job.queuePosition) return `${name} · #${job.queuePosition}`
+    if (isBehindOthers(job)) return `${name} · waiting`
+    return `${name} · starting`
   }
   if (job.status === 'running') return `${name} · running`
   if (job.status === 'done') return `${name} · done`
@@ -203,12 +212,14 @@ const COLLAPSE_FINISHED_MS = 45 * 1000
 
 function queueStatusText(status, queuePosition, waitingAhead, runningCount) {
   if (status !== 'queued') return null
-  if (!queuePosition || queuePosition <= 1) {
-    if (runningCount > 0) return 'An audit is running now. Yours is next.'
-    return 'You are first in line. This run will start next.'
+  const ahead = waitingAhead || (queuePosition > 1 ? queuePosition - 1 : 0)
+  if (ahead > 0) {
+    return `${ahead} audit${ahead === 1 ? '' : 's'} ahead of you. You are #${queuePosition} in the queue.`
   }
-  const ahead = waitingAhead || queuePosition - 1
-  return `${ahead} audit${ahead === 1 ? '' : 's'} ahead of you. You are #${queuePosition} in the queue.`
+  if (runningCount > 0) {
+    return 'Another audit is running on the worker. Yours starts next.'
+  }
+  return 'Starting this audit. The worker will pick it up in a moment.'
 }
 
 export default function AuditWizard({ project, onSaveConfig }) {
@@ -251,6 +262,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const visibleJobKey = visibleJobs.map((job) => job.id).join('|')
   const selectedJob = visibleJobs.find((job) => job.id === selectedJobId) ?? null
   const isRunning = selectedJob?.status === 'queued' || selectedJob?.status === 'running'
+  const showRunTabs = visibleJobs.length > 1
+  const selectedIsQueuedBehind = selectedJob ? isBehindOthers(selectedJob) : false
   const estSec = SUITES.find((suite) => suite.id === activeSuite)?.estSec ?? 120
   const remaining = Math.max(0, estSec - elapsed)
   const fallbackPct = Math.min(95, Math.round((elapsed / estSec) * 100))
@@ -919,61 +932,69 @@ export default function AuditWizard({ project, onSaveConfig }) {
 
       {visibleJobs.length > 0 && (
         <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Your runs</h2>
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                Only audits you started in this project. Queue numbers update live. Finished and failed tabs hide
-                after 45 seconds.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={startNewAudit}
-              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium dark:border-zinc-700 cursor-pointer"
-            >
-              Queue another
-            </button>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {visibleJobs.map((job) => {
-              const selected = job.id === selectedJobId
-              const failed = job.status === 'failed'
-              return (
+          {showRunTabs && (
+            <>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Your runs</h2>
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    Audits you started in this project. Queue numbers appear only when someone is ahead of a run.
+                    Finished and failed tabs hide after 45 seconds.
+                  </p>
+                </div>
                 <button
-                  key={job.id}
                   type="button"
-                  onClick={() => selectJob(job)}
-                  className={`rounded-lg border px-3 py-2 text-left text-sm cursor-pointer ${
-                    selected
-                      ? failed
-                        ? 'border-red-400 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200'
-                        : 'border-[#F58220] bg-[#F58220] text-white'
-                      : failed
-                        ? 'border-red-200 bg-white text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300'
-                        : 'border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200'
-                  }`}
+                  onClick={startNewAudit}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium dark:border-zinc-700 cursor-pointer"
                 >
-                  <div className="font-medium">{tabLabel(job)}</div>
-                  {collapseHint(job) && (
-                    <div className={`mt-0.5 text-[11px] ${selected ? 'opacity-80' : 'text-zinc-500'}`}>
-                      {collapseHint(job)}
-                    </div>
-                  )}
+                  Start another
                 </button>
-              )
-            })}
-          </div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {visibleJobs.map((job) => {
+                  const selected = job.id === selectedJobId
+                  const failed = job.status === 'failed'
+                  return (
+                    <button
+                      key={job.id}
+                      type="button"
+                      onClick={() => selectJob(job)}
+                      className={`rounded-lg border px-3 py-2 text-left text-sm cursor-pointer ${
+                        selected
+                          ? failed
+                            ? 'border-red-400 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200'
+                            : 'border-[#F58220] bg-[#F58220] text-white'
+                          : failed
+                            ? 'border-red-200 bg-white text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300'
+                            : 'border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200'
+                      }`}
+                    >
+                      <div className="font-medium">{tabLabel(job)}</div>
+                      {collapseHint(job) && (
+                        <div className={`mt-0.5 text-[11px] ${selected ? 'opacity-80' : 'text-zinc-500'}`}>
+                          {collapseHint(job)}
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
 
           {selectedJob && (
-            <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className={`${showRunTabs ? 'mt-4 ' : ''}rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950`}>
               {isRunning && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-[#F58220] animate-pulse" />
                       <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                        {jobStage ?? (status === 'queued' ? 'Queued...' : `Running ${suiteLabel(selectedJob.suite)}...`)}
+                        {status === 'queued'
+                          ? selectedIsQueuedBehind
+                            ? jobStage ?? 'Waiting in queue…'
+                            : 'Starting…'
+                          : jobStage ?? `Running ${suiteLabel(selectedJob.suite)}…`}
                       </span>
                     </div>
                     <span className="text-xs text-zinc-500 dark:text-zinc-400">{elapsed}s elapsed</span>
@@ -984,7 +1005,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  {jobLastMessage && (
+                  {selectedIsQueuedBehind && jobLastMessage && (
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">Latest update: {jobLastMessage}</p>
                   )}
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
@@ -1001,8 +1022,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-green-600 dark:text-green-400">Audit complete.</p>
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
-                    Download below, or open the project <span className="font-medium">Reports</span> tab. This tab
-                    hides in a moment.
+                    Download below, or open the project <span className="font-medium">Reports</span> tab.
                   </p>
                   <div className="flex flex-wrap gap-3">
                     {reportFiles.length > 1 ? (
@@ -1036,8 +1056,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     {jobError || 'The worker reported a failure, but no extra error text was saved.'}
                   </p>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    Nothing was saved to Reports for this run. This tab hides after 45 seconds. Use Queue another
-                    to start a new audit without waiting.
+                    Nothing was saved to Reports for this run. This status hides after 45 seconds. You can start
+                    another audit without waiting.
                   </p>
                 </div>
               )}
