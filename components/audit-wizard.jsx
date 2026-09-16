@@ -220,6 +220,7 @@ function isBehindOthers(job) {
 function tabLabel(job) {
   const name = suiteLabel(job.suite)
   if (job.status === 'queued') {
+    if (job.workerTriggeredAt) return `${name} · GitHub`
     if (job.workerRequired && job.workerOnline === false) return `${name} · worker off`
     if (isBehindOthers(job) && job.queuePosition) return `${name} · #${job.queuePosition}`
     if (isBehindOthers(job)) return `${name} · waiting`
@@ -233,8 +234,12 @@ function tabLabel(job) {
 
 const COLLAPSE_FINISHED_MS = 45 * 1000
 
-function queueStatusText(status, queuePosition, waitingAhead, runningCount, workerRequired, workerOnline, queuedForSec) {
+function queueStatusText(status, queuePosition, waitingAhead, runningCount, workerRequired, workerOnline, queuedForSec, workerTriggeredAt) {
   if (status !== 'queued') return null
+  if (workerRequired && workerOnline === false && workerTriggeredAt) {
+    const waited = queuedForSec ? ` It has been waiting ${fmtTime(queuedForSec)}.` : ''
+    return `GitHub Actions worker was triggered for this audit.${waited} It will move to running when it reaches the front of the queue.`
+  }
   if (workerRequired && workerOnline === false) {
     const waited = queuedForSec ? ` It has been waiting ${fmtTime(queuedForSec)}.` : ''
     const queueNote = queuePosition && queuePosition > 1 ? ` There are ${queuePosition - 1} older audit${queuePosition === 2 ? '' : 's'} ahead.` : ''
@@ -278,6 +283,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const [runningCount, setRunningCount] = useState(0)
   const [workerRequired, setWorkerRequired] = useState(false)
   const [workerOnline, setWorkerOnline] = useState(null)
+  const [workerTriggeredAt, setWorkerTriggeredAt] = useState(null)
   const [queuedForSec, setQueuedForSec] = useState(null)
   const [reportFiles, setReportFiles] = useState([])
   const [myJobs, setMyJobs] = useState([])
@@ -312,9 +318,11 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const displayRunningCount = selectedJob?.runningCount ?? runningCount
   const displayWorkerRequired = selectedJob?.workerRequired ?? workerRequired
   const displayWorkerOnline = selectedJob?.workerOnline ?? workerOnline
+  const displayWorkerTriggeredAt = selectedJob?.workerTriggeredAt ?? workerTriggeredAt
   const displayQueuedForSec = selectedJob?.queuedForSec ?? queuedForSec
   const displayReportFiles = Array.isArray(selectedJob?.reportFiles) ? selectedJob.reportFiles : reportFiles
   const isRunning = displayStatus === 'queued' || displayStatus === 'running'
+  const hasActiveRun = myJobs.some((job) => job.status === 'queued' || job.status === 'running') || isRunning
   const showRunTabs = visibleJobs.length > 1
   const selectedIsQueuedBehind = selectedJob ? isBehindOthers(selectedJob) : false
   const estSec = SUITES.find((suite) => suite.id === (selectedJob?.suite ?? activeSuite))?.estSec ?? 120
@@ -346,6 +354,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setRunningCount(0)
     setWorkerRequired(false)
     setWorkerOnline(null)
+    setWorkerTriggeredAt(null)
     setQueuedForSec(null)
     setReportFiles([])
     startRef.current = null
@@ -410,6 +419,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setRunningCount(job.runningCount ?? 0)
     setWorkerRequired(Boolean(job.workerRequired))
     setWorkerOnline(typeof job.workerOnline === 'boolean' ? job.workerOnline : null)
+    setWorkerTriggeredAt(job.workerTriggeredAt ?? null)
     setQueuedForSec(job.queuedForSec ?? null)
     setReportFiles(Array.isArray(job.reportFiles) ? job.reportFiles : [])
     if (job.createdAt) {
@@ -430,6 +440,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   }
 
   function startNewAudit() {
+    if (hasActiveRun) return
     setStepIndex(0)
   }
 
@@ -753,7 +764,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
   }
 
   async function startAudit() {
-    if (starting) return
+    if (starting || hasActiveRun) return
 
     let payload
     try {
@@ -781,10 +792,14 @@ export default function AuditWizard({ project, onSaveConfig }) {
         error: null,
         stage: 'Queued',
         progress: 5,
-        lastMessage: 'Waiting for an available audit slot',
+        lastMessage:
+          data.workerTrigger?.status === 'triggered'
+            ? 'Queued and GitHub Actions worker started'
+            : 'Waiting for an available audit slot',
         queuePosition: null,
         waitingAhead: 0,
         runningCount: 0,
+        workerTriggeredAt: data.workerTrigger?.status === 'triggered' ? Date.now() : null,
         reportFiles: [],
         createdAt: Date.now(),
       }
@@ -837,6 +852,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
         setRunningCount(data.runningCount ?? 0)
         setWorkerRequired(Boolean(data.workerRequired))
         setWorkerOnline(typeof data.workerOnline === 'boolean' ? data.workerOnline : null)
+        setWorkerTriggeredAt(data.workerTriggeredAt ?? null)
         setQueuedForSec(data.queuedForSec ?? null)
         setReportFiles(Array.isArray(data.reportFiles) ? data.reportFiles : [])
         writeStoredJob(project?.id, {
@@ -1021,9 +1037,10 @@ export default function AuditWizard({ project, onSaveConfig }) {
                 <button
                   type="button"
                   onClick={startNewAudit}
-                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium dark:border-zinc-700 cursor-pointer"
+                  disabled={hasActiveRun}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40 dark:border-zinc-700 cursor-pointer"
                 >
-                  Start another
+                  {hasActiveRun ? 'Audit in progress' : 'Start another'}
                 </button>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -1096,6 +1113,7 @@ export default function AuditWizard({ project, onSaveConfig }) {
                           displayWorkerRequired,
                           displayWorkerOnline,
                           displayQueuedForSec,
+                          displayWorkerTriggeredAt,
                         )
                       : remaining > 0
                         ? `Typical remaining time: ${fmtTime(remaining)}`
@@ -1656,10 +1674,10 @@ export default function AuditWizard({ project, onSaveConfig }) {
                 <button
                   type="button"
                   onClick={startAudit}
-                  disabled={starting || stepErrors.length > 0}
+                  disabled={starting || hasActiveRun || stepErrors.length > 0}
                   className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] disabled:opacity-40 cursor-pointer"
                 >
-                  {starting ? 'Queuing…' : 'Start audit'}
+                  {starting ? 'Queuing…' : hasActiveRun ? 'Audit in progress' : 'Start audit'}
                 </button>
               ) : (
                 <button

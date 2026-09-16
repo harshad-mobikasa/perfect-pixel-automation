@@ -20,6 +20,7 @@ import {
 
 const GENERATED_PASSWORD_VISIBLE_MS = 8000
 const ACTIVITY_PAGE_SIZE = 20
+const LAST_PROJECT_STORAGE_KEY = 'audit-last-selected-project'
 
 const SUITE_LABELS = {
   pixelmatch: 'Perfect Pixel',
@@ -154,6 +155,23 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     const timer = window.setTimeout(() => setGeneratedPassword(''), GENERATED_PASSWORD_VISIBLE_MS)
     return () => window.clearTimeout(timer)
   }, [generatedPassword])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const storedProjectId = window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY)
+      if (storedProjectId && projects.some((project) => project.id === storedProjectId)) {
+        setSelectedProjectId(storedProjectId)
+      }
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [projects])
+
+  useEffect(() => {
+    if (selectedProjectId) {
+      window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, selectedProjectId)
+    }
+  }, [selectedProjectId])
+
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],

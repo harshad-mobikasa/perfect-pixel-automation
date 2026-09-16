@@ -45,6 +45,7 @@ export async function GET(_request, { params }) {
     workerRequired: !shouldProcessAuditsInCurrentProcess(),
     workerOnline: Boolean(workerHeartbeat?.at),
     workerLastSeenAt: workerHeartbeat?.at ?? null,
+    workerTriggeredAt: job.workerTriggeredAt ?? null,
     reportFiles:
       job.status === 'done'
         ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName }))
