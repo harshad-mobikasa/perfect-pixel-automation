@@ -1,20 +1,24 @@
-import { getAccountStore } from '../../../lib/account-store.js'
-import { ACTIVITY_RETENTION_DAYS, listActivity } from '../../../lib/activity-log.js'
+import { listActivity } from '../../../lib/activity-log.js'
 import { jsonError, requireUserManager } from '../../../lib/require-auth.js'
 import { actorManagedProjectIds } from '../../../lib/roles.js'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+export async function GET(request) {
   const auth = await requireUserManager()
   if (auth.error) return auth.error
 
+  const url = new URL(request.url)
+
   try {
-    const store = getAccountStore()
-    const projects = await store.listProjects()
-    const events = await listActivity(auth.user, actorManagedProjectIds(auth.user, projects))
-    return Response.json({ events, retentionDays: ACTIVITY_RETENTION_DAYS })
+    const result = await listActivity(auth.user, actorManagedProjectIds(auth.user), {
+      from: url.searchParams.get('from') ?? '',
+      to: url.searchParams.get('to') ?? '',
+      page: url.searchParams.get('page'),
+      pageSize: url.searchParams.get('pageSize'),
+    })
+    return Response.json(result)
   } catch (error) {
     return jsonError(error, 500)
   }

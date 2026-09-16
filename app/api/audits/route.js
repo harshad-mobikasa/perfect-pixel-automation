@@ -6,6 +6,7 @@ import { getFileStore } from '../../../lib/shopify-file-store.js'
 import { isShopifyFilesConfigured, shouldProcessAuditsInCurrentProcess } from '../../../lib/runtime-config.js'
 import { validateAuditRequest } from '../../../lib/ssrf-guard.js'
 import { canAccessProject, getAccountStore } from '../../../lib/account-store.js'
+import { triggerGitHubAuditWorker } from '../../../lib/github-actions.js'
 import { jsonNoStore, requireUser } from '../../../lib/require-auth.js'
 
 export const runtime = 'nodejs'
@@ -198,6 +199,7 @@ export async function POST(request) {
   }
 
   const processHere = shouldProcessAuditsInCurrentProcess()
+  let workerTrigger = null
 
   try {
     if (processHere) {
@@ -219,12 +221,24 @@ export async function POST(request) {
       fileStore,
       persistReports: isShopifyFilesConfigured(),
     })
+  } else {
+    workerTrigger = await triggerGitHubAuditWorker(jobId).catch((err) => ({
+      status: 'failed',
+      reason: err instanceof Error ? err.message : 'GitHub dispatch failed',
+    }))
+    if (workerTrigger.status === 'failed') {
+      await jobStore.updateJob(jobId, {
+        updatedAt: Date.now(),
+        lastMessage: 'Queued, but the GitHub worker did not start automatically',
+      })
+    }
   }
 
   return Response.json(
     {
       jobId,
       mode: processHere ? 'local' : 'shared-worker',
+      workerTrigger,
     },
     { status: 202 },
   )

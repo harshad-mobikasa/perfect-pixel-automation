@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "worker": "node scripts/update-audit-kit.mjs && node scripts/run-audit-worker.mjs",
+    "worker:once": "node scripts/update-audit-kit.mjs && node scripts/run-audit-worker-once.mjs",
     "container": "node scripts/container-start.mjs",
     "lint": "eslint",
     "report-pixelmatch": "audit-kit report:pixelmatch-pdf:all",

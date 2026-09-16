@@ -19,6 +19,7 @@ import {
 } from '../lib/roles.js'
 
 const GENERATED_PASSWORD_VISIBLE_MS = 8000
+const ACTIVITY_PAGE_SIZE = 20
 
 const SUITE_LABELS = {
   pixelmatch: 'Perfect Pixel',
@@ -108,6 +109,11 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [reportDateFrom, setReportDateFrom] = useState('')
   const [reportDateTo, setReportDateTo] = useState('')
   const [activityEvents, setActivityEvents] = useState([])
+  const [activityLoading, setActivityLoading] = useState(false)
+  const [activityPage, setActivityPage] = useState(1)
+  const [activityTotal, setActivityTotal] = useState(0)
+  const [activityDateFrom, setActivityDateFrom] = useState('')
+  const [activityDateTo, setActivityDateTo] = useState('')
   const [activityRetentionDays, setActivityRetentionDays] = useState(45)
   const [assignEditor, setAssignEditor] = useState(null)
   const [assignDraftIds, setAssignDraftIds] = useState([])
@@ -179,6 +185,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const reportsReadyForSelectedProject = Boolean(
     selectedProject && !reportsLoading && reportsProjectId === selectedProject.id,
   )
+  const activityTotalPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE))
   const teamMembers = useMemo(() => {
     if (!selectedProject) return []
     const details = new Map()
@@ -238,16 +245,65 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     }
   }
 
-  async function loadActivity() {
-    const data = await readJson(await apiFetch('/api/activity'))
-    setActivityEvents(data.events ?? [])
-    setActivityRetentionDays(data.retentionDays ?? 45)
+  async function loadActivity(options = {}) {
+    const page = options.page ?? activityPage
+    const from = options.from ?? activityDateFrom
+    const to = options.to ?? activityDateTo
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(ACTIVITY_PAGE_SIZE),
+    })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+
+    setActivityPage(page)
+    setActivityLoading(true)
+    try {
+      const data = await readJson(await apiFetch(`/api/activity?${params.toString()}`))
+      setActivityEvents(data.events ?? [])
+      setActivityRetentionDays(data.retentionDays ?? 45)
+      setActivityTotal(data.total ?? 0)
+      setActivityPage(data.page ?? page)
+    } finally {
+      setActivityLoading(false)
+    }
   }
 
   async function openActivity() {
     setView('activity')
     try {
-      await loadActivity()
+      await loadActivity({ page: 1 })
+    } catch (loadError) {
+      setError(loadError.message)
+    }
+  }
+
+  async function handleActivityFilter(event) {
+    event.preventDefault()
+    setError('')
+    try {
+      await loadActivity({ page: 1 })
+    } catch (loadError) {
+      setError(loadError.message)
+    }
+  }
+
+  async function clearActivityFilter() {
+    setActivityDateFrom('')
+    setActivityDateTo('')
+    setError('')
+    try {
+      await loadActivity({ page: 1, from: '', to: '' })
+    } catch (loadError) {
+      setError(loadError.message)
+    }
+  }
+
+  async function changeActivityPage(page) {
+    if (page < 1 || page > activityTotalPages || activityLoading) return
+    setError('')
+    try {
+      await loadActivity({ page })
     } catch (loadError) {
       setError(loadError.message)
     }
@@ -1255,6 +1311,49 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                   {admin ? '' : ' You only see events for projects you admin.'}
                 </p>
               </div>
+              <form
+                onSubmit={handleActivityFilter}
+                className="flex flex-wrap items-end gap-3 rounded-2xl border border-[#3C3D41]/10 bg-white p-4"
+              >
+                <label className="space-y-1 text-sm">
+                  <span className="font-medium">From</span>
+                  <input
+                    type="date"
+                    value={activityDateFrom}
+                    onChange={(event) => setActivityDateFrom(event.target.value)}
+                    className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
+                  />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="font-medium">To</span>
+                  <input
+                    type="date"
+                    value={activityDateTo}
+                    onChange={(event) => setActivityDateTo(event.target.value)}
+                    className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={activityLoading}
+                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 cursor-pointer"
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  onClick={clearActivityFilter}
+                  disabled={activityLoading || (!activityDateFrom && !activityDateTo)}
+                  className="rounded-lg border border-[#3C3D41]/15 px-4 py-2 text-sm font-medium disabled:opacity-50 cursor-pointer"
+                >
+                  Clear
+                </button>
+                <p className="text-sm text-[#3C3D41]/60">
+                  {activityLoading
+                    ? 'Loading activity...'
+                    : `Showing page ${activityPage} of ${activityTotalPages} · ${activityTotal} event${activityTotal === 1 ? '' : 's'}`}
+                </p>
+              </form>
               <div className="overflow-hidden rounded-2xl border border-[#3C3D41]/10 bg-white">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-[#f7f5f2] text-xs uppercase tracking-wide text-[#3C3D41]/60">
@@ -1266,7 +1365,13 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     </tr>
                   </thead>
                   <tbody>
-                    {activityEvents.map((event) => (
+                    {activityLoading ? (
+                      <tr>
+                        <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={4}>
+                          Loading activity...
+                        </td>
+                      </tr>
+                    ) : activityEvents.map((event) => (
                       <tr key={event.id} className="border-t border-[#3C3D41]/10">
                         <td className="px-4 py-3">{formatDateTime(event.at)}</td>
                         <td className="px-4 py-3">
@@ -1281,15 +1386,38 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         </td>
                       </tr>
                     ))}
-                    {activityEvents.length === 0 && (
+                    {!activityLoading && activityEvents.length === 0 && (
                       <tr>
                         <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={4}>
-                          No activity in the current window.
+                          No activity in this date range.
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-[#3C3D41]/10 bg-white px-4 py-3">
+                <p className="text-sm text-[#3C3D41]/60">
+                  Page {activityPage} of {activityTotalPages}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => changeActivityPage(activityPage - 1)}
+                    disabled={activityLoading || activityPage <= 1}
+                    className="rounded-lg border border-[#3C3D41]/15 px-4 py-2 text-sm font-medium disabled:opacity-50 cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeActivityPage(activityPage + 1)}
+                    disabled={activityLoading || activityPage >= activityTotalPages}
+                    className="rounded-lg border border-[#3C3D41]/15 px-4 py-2 text-sm font-medium disabled:opacity-50 cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
               </div>
             </div>
           )}
