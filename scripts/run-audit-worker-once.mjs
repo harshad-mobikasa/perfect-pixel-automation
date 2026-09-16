@@ -8,6 +8,8 @@ const { pruneActivity } = await import('../lib/activity-log.js')
 const { isSharedInfrastructureConfigured } = await import('../lib/runtime-config.js')
 
 const HEARTBEAT_INTERVAL_MS = 30 * 1000
+const parsedMaxJobs = Number.parseInt(process.env.WORKER_MAX_JOBS_PER_RUN || '10', 10)
+const MAX_JOBS_PER_RUN = Number.isFinite(parsedMaxJobs) && parsedMaxJobs > 0 ? parsedMaxJobs : 10
 const WORKER_ID = `${process.env.GITHUB_RUN_ID || process.env.HOSTNAME || 'audit-worker-once'}:${process.pid}`
 
 function startHeartbeat(jobStore) {
@@ -40,34 +42,42 @@ async function main() {
       console.error('Activity log cleanup failed', error)
     })
 
-    const nextJob = await jobStore.dequeueJob()
-    if (!nextJob) {
-      console.log('No queued audit jobs found')
-      return
-    }
+    let processed = 0
 
-    const { jobId, job } = nextJob
-    const auditRequest = job.request
+    while (processed < MAX_JOBS_PER_RUN) {
+      const nextJob = await jobStore.dequeueJob()
+      if (!nextJob) {
+        console.log(processed === 0 ? 'No queued audit jobs found' : `Processed ${processed} queued audit job(s)`)
+        return
+      }
 
-    if (!auditRequest) {
-      await jobStore.markFinished(jobId, {
-        status: 'failed',
-        completedAt: Date.now(),
-        updatedAt: Date.now(),
-        workDir: null,
-        stage: 'Audit failed',
-        error: 'Queued job is missing its audit request payload',
+      const { jobId, job } = nextJob
+      const auditRequest = job.request
+
+      if (!auditRequest) {
+        await jobStore.markFinished(jobId, {
+          status: 'failed',
+          completedAt: Date.now(),
+          updatedAt: Date.now(),
+          workDir: null,
+          stage: 'Audit failed',
+          error: 'Queued job is missing its audit request payload',
+        })
+        processed += 1
+        continue
+      }
+
+      console.log(`Running audit job ${jobId} (${auditRequest.suite})`)
+
+      await runAudit(jobId, auditRequest, {
+        jobStore,
+        fileStore,
+        persistReports: true,
       })
-      return
+      processed += 1
     }
 
-    console.log(`Running audit job ${jobId} (${auditRequest.suite})`)
-
-    await runAudit(jobId, auditRequest, {
-      jobStore,
-      fileStore,
-      persistReports: true,
-    })
+    console.log(`Processed ${processed} queued audit job(s); stopping at WORKER_MAX_JOBS_PER_RUN`)
   } finally {
     clearInterval(heartbeatTimer)
   }
