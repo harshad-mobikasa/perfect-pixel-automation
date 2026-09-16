@@ -120,6 +120,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [assignDraftIds, setAssignDraftIds] = useState([])
   const [assignSaving, setAssignSaving] = useState(false)
   const extrasRequestRef = useRef(0)
+  const restoredProjectRef = useRef(false)
   const [creatingUser, setCreatingUser] = useState(false)
   const [inviteForm, setInviteForm] = useState({
     name: '',
@@ -162,12 +163,13 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       if (storedProjectId && projects.some((project) => project.id === storedProjectId)) {
         setSelectedProjectId(storedProjectId)
       }
+      restoredProjectRef.current = true
     }, 0)
     return () => window.clearTimeout(timer)
   }, [projects])
 
   useEffect(() => {
-    if (selectedProjectId) {
+    if (restoredProjectRef.current && selectedProjectId) {
       window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, selectedProjectId)
     }
   }, [selectedProjectId])

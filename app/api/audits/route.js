@@ -16,6 +16,7 @@ export const maxDuration = 60
 const RATE_LIMIT = 5
 const RATE_WINDOW_MS = 10 * 60 * 1000
 const QUEUE_CAP = 20
+const WORKER_TRIGGER_RETRY_MS = 5 * 60 * 1000
 
 async function getWorkerStatus(jobStore) {
   const heartbeat =
@@ -79,6 +80,38 @@ async function summarizeUserJobs(jobStore, userId, projectId) {
   return summaries
 }
 
+async function retryStaleGitHubWorkerTrigger(jobStore, userId, projectId) {
+  const worker = await getWorkerStatus(jobStore)
+  if (!worker.workerRequired || worker.workerOnline) return
+
+  const jobs = await jobStore.listJobsForUser(userId, projectId)
+  const retryJob = jobs.find((job) => {
+    if (job.userId !== userId || job.projectId !== projectId || job.status !== 'queued') return false
+    const triggeredAt = job.workerTriggeredAt ?? 0
+    return !triggeredAt || Date.now() - triggeredAt >= WORKER_TRIGGER_RETRY_MS
+  })
+  if (!retryJob) return
+
+  const now = Date.now()
+  await jobStore.updateJob(retryJob.id, {
+    updatedAt: now,
+    workerTriggeredAt: now,
+    lastMessage: 'Queued and GitHub Actions worker started',
+  })
+
+  const workerTrigger = await triggerGitHubAuditWorker(retryJob.id).catch((err) => ({
+    status: 'failed',
+    reason: err instanceof Error ? err.message : 'GitHub dispatch failed',
+  }))
+
+  if (workerTrigger.status === 'failed') {
+    await jobStore.updateJob(retryJob.id, {
+      updatedAt: Date.now(),
+      lastMessage: 'Queued, but the GitHub worker did not start automatically',
+    })
+  }
+}
+
 export async function GET(request) {
   const auth = await requireUser()
   if (auth.error) return auth.error
@@ -98,6 +131,7 @@ export async function GET(request) {
   if (typeof jobStore.recoverStaleRunningJobs === 'function') {
     await jobStore.recoverStaleRunningJobs()
   }
+  await retryStaleGitHubWorkerTrigger(jobStore, auth.user.id, projectId)
   const jobs = await summarizeUserJobs(jobStore, auth.user.id, projectId)
   return jsonNoStore({ jobs })
 }
