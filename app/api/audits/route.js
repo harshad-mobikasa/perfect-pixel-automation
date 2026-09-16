@@ -94,6 +94,9 @@ export async function GET(request) {
   }
 
   const jobStore = getJobStore()
+  if (typeof jobStore.recoverStaleRunningJobs === 'function') {
+    await jobStore.recoverStaleRunningJobs()
+  }
   const jobs = await summarizeUserJobs(jobStore, auth.user.id, projectId)
   return jsonNoStore({ jobs })
 }
@@ -230,6 +233,12 @@ export async function POST(request) {
       await jobStore.updateJob(jobId, {
         updatedAt: Date.now(),
         lastMessage: 'Queued, but the GitHub worker did not start automatically',
+      })
+    } else if (workerTrigger.status === 'triggered') {
+      await jobStore.updateJob(jobId, {
+        updatedAt: Date.now(),
+        workerTriggeredAt: Date.now(),
+        lastMessage: 'Queued and GitHub Actions worker started',
       })
     }
   }

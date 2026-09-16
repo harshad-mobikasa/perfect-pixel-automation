@@ -12,6 +12,9 @@ export async function GET(_request, { params }) {
 
   const { jobId } = await params
   const jobStore = getJobStore()
+  if (typeof jobStore.recoverStaleRunningJobs === 'function') {
+    await jobStore.recoverStaleRunningJobs()
+  }
   const job = await jobStore.getJob(jobId)
 
   if (!job || !(await canAccessJob(auth.user, job))) {

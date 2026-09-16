@@ -9,10 +9,21 @@ const { isSharedInfrastructureConfigured } = await import('../lib/runtime-config
 
 const POLL_INTERVAL_MS = 3000
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000
+const HEARTBEAT_INTERVAL_MS = 30 * 1000
 const WORKER_ID = `${process.env.HOSTNAME || 'audit-worker'}:${process.pid}`
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function startHeartbeat(jobStore) {
+  const beat = () => {
+    jobStore.recordWorkerHeartbeat(WORKER_ID).catch((error) => {
+      console.error('Worker heartbeat failed', error)
+    })
+  }
+  beat()
+  return setInterval(beat, HEARTBEAT_INTERVAL_MS)
 }
 
 async function main() {
@@ -27,13 +38,10 @@ async function main() {
   const fileStore = getFileStore()
 
   console.log('Audit worker started')
+  startHeartbeat(jobStore)
   let lastCleanupAt = 0
 
   while (true) {
-    await jobStore.recordWorkerHeartbeat(WORKER_ID).catch((error) => {
-      console.error('Worker heartbeat failed', error)
-    })
-
     if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
       lastCleanupAt = Date.now()
       await cleanupExpiredReports().catch((error) => {

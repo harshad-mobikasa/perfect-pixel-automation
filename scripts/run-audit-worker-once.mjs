@@ -7,7 +7,18 @@ const { cleanupExpiredReports } = await import('../lib/report-store.js')
 const { pruneActivity } = await import('../lib/activity-log.js')
 const { isSharedInfrastructureConfigured } = await import('../lib/runtime-config.js')
 
+const HEARTBEAT_INTERVAL_MS = 30 * 1000
 const WORKER_ID = `${process.env.GITHUB_RUN_ID || process.env.HOSTNAME || 'audit-worker-once'}:${process.pid}`
+
+function startHeartbeat(jobStore) {
+  const beat = () => {
+    jobStore.recordWorkerHeartbeat(WORKER_ID).catch((error) => {
+      console.error('Worker heartbeat failed', error)
+    })
+  }
+  beat()
+  return setInterval(beat, HEARTBEAT_INTERVAL_MS)
+}
 
 async function main() {
   if (!isSharedInfrastructureConfigured()) {
@@ -19,45 +30,47 @@ async function main() {
 
   const jobStore = getJobStore()
   const fileStore = getFileStore()
+  const heartbeatTimer = startHeartbeat(jobStore)
 
-  await jobStore.recordWorkerHeartbeat(WORKER_ID).catch((error) => {
-    console.error('Worker heartbeat failed', error)
-  })
-  await cleanupExpiredReports().catch((error) => {
-    console.error('Report cleanup failed', error)
-  })
-  await pruneActivity().catch((error) => {
-    console.error('Activity log cleanup failed', error)
-  })
-
-  const nextJob = await jobStore.dequeueJob()
-  if (!nextJob) {
-    console.log('No queued audit jobs found')
-    return
-  }
-
-  const { jobId, job } = nextJob
-  const auditRequest = job.request
-
-  if (!auditRequest) {
-    await jobStore.markFinished(jobId, {
-      status: 'failed',
-      completedAt: Date.now(),
-      updatedAt: Date.now(),
-      workDir: null,
-      stage: 'Audit failed',
-      error: 'Queued job is missing its audit request payload',
+  try {
+    await cleanupExpiredReports().catch((error) => {
+      console.error('Report cleanup failed', error)
     })
-    return
+    await pruneActivity().catch((error) => {
+      console.error('Activity log cleanup failed', error)
+    })
+
+    const nextJob = await jobStore.dequeueJob()
+    if (!nextJob) {
+      console.log('No queued audit jobs found')
+      return
+    }
+
+    const { jobId, job } = nextJob
+    const auditRequest = job.request
+
+    if (!auditRequest) {
+      await jobStore.markFinished(jobId, {
+        status: 'failed',
+        completedAt: Date.now(),
+        updatedAt: Date.now(),
+        workDir: null,
+        stage: 'Audit failed',
+        error: 'Queued job is missing its audit request payload',
+      })
+      return
+    }
+
+    console.log(`Running audit job ${jobId} (${auditRequest.suite})`)
+
+    await runAudit(jobId, auditRequest, {
+      jobStore,
+      fileStore,
+      persistReports: true,
+    })
+  } finally {
+    clearInterval(heartbeatTimer)
   }
-
-  console.log(`Running audit job ${jobId} (${auditRequest.suite})`)
-
-  await runAudit(jobId, auditRequest, {
-    jobStore,
-    fileStore,
-    persistReports: true,
-  })
 }
 
 main().catch((error) => {
