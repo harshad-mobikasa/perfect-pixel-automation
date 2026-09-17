@@ -1585,64 +1585,66 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 </p>
               </div>
 
-              <form onSubmit={handleUpdateProfile} className="max-w-md rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
-                <h2 className="text-lg font-semibold">Profile</h2>
-                <label className="space-y-1">
-                  <span className="text-sm font-medium">Name</span>
-                  <input
-                    value={profileForm.name}
-                    onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))}
-                    className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm font-medium">Email</span>
-                  <input
-                    value={user.email}
-                    readOnly
-                    className="w-full rounded-lg border border-[#3C3D41]/15 bg-[#f7f5f2] px-3 py-2 text-[#3C3D41]/70"
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
-                >
-                  Save profile
-                </button>
-              </form>
+              <div className="grid gap-6 xl:grid-cols-2">
+                <form onSubmit={handleUpdateProfile} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
+                  <h2 className="text-lg font-semibold">Profile</h2>
+                  <label className="space-y-1">
+                    <span className="text-sm font-medium">Name</span>
+                    <input
+                      value={profileForm.name}
+                      onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))}
+                      className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-sm font-medium">Email</span>
+                    <input
+                      value={user.email}
+                      readOnly
+                      className="w-full rounded-lg border border-[#3C3D41]/15 bg-[#f7f5f2] px-3 py-2 text-[#3C3D41]/70"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    className="mt-3 rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                  >
+                    Save profile
+                  </button>
+                </form>
 
-              <form onSubmit={handleChangeOwnPassword} className="max-w-md rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
-                <h2 className="text-lg font-semibold">Change password</h2>
-                <PasswordField
-                  className="mt-0"
-                  label="Current password"
-                  autoComplete="current-password"
-                  value={passwordForm.currentPassword}
-                  onChange={(event) =>
-                    setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))
-                  }
-                />
-                <PasswordField
-                  label="New password"
-                  autoComplete="new-password"
-                  value={passwordForm.password}
-                  onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))}
-                />
-                <PasswordField
-                  label="Confirm new password"
-                  autoComplete="new-password"
-                  value={passwordForm.confirmPassword}
-                  onChange={(event) =>
-                    setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))
-                  }
-                />
-                <button
-                  type="submit"
-                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
-                >
-                  Update password
-                </button>
-              </form>
+                <form onSubmit={handleChangeOwnPassword} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
+                  <h2 className="text-lg font-semibold">Change password</h2>
+                  <PasswordField
+                    className="mt-0"
+                    label="Current password"
+                    autoComplete="current-password"
+                    value={passwordForm.currentPassword}
+                    onChange={(event) =>
+                      setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))
+                    }
+                  />
+                  <PasswordField
+                    label="New password"
+                    autoComplete="new-password"
+                    value={passwordForm.password}
+                    onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))}
+                  />
+                  <PasswordField
+                    label="Confirm new password"
+                    autoComplete="new-password"
+                    value={passwordForm.confirmPassword}
+                    onChange={(event) =>
+                      setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))
+                    }
+                  />
+                  <button
+                    type="submit"
+                    className="mt-3 rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                  >
+                    Update password
+                  </button>
+                </form>
+              </div>
             </div>
           )}
         </main>
