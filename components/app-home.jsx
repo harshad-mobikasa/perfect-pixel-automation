@@ -131,6 +131,19 @@ function projectRoleLabel(user, project) {
   return roleLabel(role)
 }
 
+function InviteStatusBadge({ user }) {
+  const pending = user?.inviteStatus === 'pending'
+  return (
+    <span
+      className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
+        pending ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
+      }`}
+    >
+      {pending ? 'Invite pending' : 'Active'}
+    </span>
+  )
+}
+
 export default function AppHome({ initialUser, initialProjects = [], initialUsers = [] }) {
   const router = useRouter()
   const [user] = useState(initialUser)
@@ -631,7 +644,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   }
 
   async function handleAssignPassword(entry) {
-    if (!window.confirm(`Send a password reset email to ${entry.email}?`)) return
+    const pending = entry.inviteStatus === 'pending'
+    if (!window.confirm(`${pending ? 'Resend invite' : 'Send a password reset email'} to ${entry.email}?`)) return
     setNotice('')
     setError('')
     setInviteResults([])
@@ -639,7 +653,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       await readJson(
         await apiFetch(`/api/admin/users/${entry.id}/password`, { method: 'POST' }),
       )
-      setNotice(`Password reset email sent to ${entry.email}`)
+      setNotice(`${pending ? 'Invite' : 'Password reset'} email sent to ${entry.email}`)
     } catch (submitError) {
       setError(submitError.message)
     }
@@ -935,6 +949,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         <tr>
                           <th className="px-4 py-3">Name</th>
                           <th className="px-4 py-3">Email</th>
+                          <th className="px-4 py-3">Status</th>
                           <th className="px-4 py-3">Role on this project</th>
                           {canManageSelected && <th className="px-4 py-3">Actions</th>}
                         </tr>
@@ -944,6 +959,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                           <tr key={entry.id} className="border-t border-[#3C3D41]/10">
                             <td className="px-4 py-3 font-medium">{entry.name}</td>
                             <td className="px-4 py-3">{entry.email}</td>
+                            <td className="px-4 py-3"><InviteStatusBadge user={entry} /></td>
                             <td className="px-4 py-3">
                               {canManageSelected && entry.id !== user.id && admin ? (
                                 <select
@@ -1309,6 +1325,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     <tr>
                       <th className="px-4 py-3">Name</th>
                       <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Status</th>
                       <th className="px-4 py-3">Projects</th>
                       <th className="px-4 py-3">Actions</th>
                     </tr>
@@ -1318,6 +1335,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                       <tr key={entry.id} className="border-t border-[#3C3D41]/10">
                         <td className="px-4 py-3 font-medium">{entry.name}</td>
                         <td className="px-4 py-3">{entry.email}</td>
+                        <td className="px-4 py-3"><InviteStatusBadge user={entry} /></td>
                         <td className="px-4 py-3">
                           {isAdmin(entry) ? (
                             'All projects'
@@ -1350,7 +1368,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                                 onClick={() => handleAssignPassword(entry)}
                                 className="text-[#F58220] hover:underline cursor-pointer"
                               >
-                                Send reset email
+                                {entry.inviteStatus === 'pending' ? 'Resend invite' : 'Send reset email'}
                               </button>
                               {admin && (
                                 <button
