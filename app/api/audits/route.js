@@ -109,6 +109,14 @@ async function retryStaleGitHubWorkerTrigger(jobStore, userId, projectId) {
       updatedAt: Date.now(),
       lastMessage: 'Queued, but the GitHub worker did not start automatically',
     })
+  } else if (workerTrigger.status === 'skipped') {
+    await jobStore.updateJob(retryJob.id, {
+      updatedAt: Date.now(),
+      lastMessage:
+        workerTrigger.reason === 'GitHub worker was triggered recently'
+          ? 'Queued; a recent GitHub Actions worker will pick this up'
+          : 'Queued, but GitHub worker trigger is not configured',
+    })
   }
 }
 
@@ -260,6 +268,13 @@ export async function POST(request) {
       persistReports: isShopifyFilesConfigured(),
     })
   } else {
+    const triggerStartedAt = Date.now()
+    await jobStore.updateJob(jobId, {
+      updatedAt: triggerStartedAt,
+      workerTriggeredAt: triggerStartedAt,
+      lastMessage: 'Queued and starting GitHub Actions worker',
+    })
+
     workerTrigger = await triggerGitHubAuditWorker(jobId).catch((err) => ({
       status: 'failed',
       reason: err instanceof Error ? err.message : 'GitHub dispatch failed',
@@ -272,8 +287,15 @@ export async function POST(request) {
     } else if (workerTrigger.status === 'triggered') {
       await jobStore.updateJob(jobId, {
         updatedAt: Date.now(),
-        workerTriggeredAt: Date.now(),
         lastMessage: 'Queued and GitHub Actions worker started',
+      })
+    } else if (workerTrigger.status === 'skipped') {
+      await jobStore.updateJob(jobId, {
+        updatedAt: Date.now(),
+        lastMessage:
+          workerTrigger.reason === 'GitHub worker was triggered recently'
+            ? 'Queued; a recent GitHub Actions worker will pick this up'
+            : 'Queued, but GitHub worker trigger is not configured',
       })
     }
   }
