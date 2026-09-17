@@ -146,7 +146,7 @@ function InviteStatusBadge({ user }) {
 
 export default function AppHome({ initialUser, initialProjects = [], initialUsers = [] }) {
   const router = useRouter()
-  const [user] = useState(initialUser)
+  const [user, setUser] = useState(initialUser)
   const [projects, setProjects] = useState(initialProjects)
   const [users, setUsers] = useState(initialUsers)
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjects[0]?.id ?? '')
@@ -194,6 +194,9 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     currentPassword: '',
     password: '',
     confirmPassword: '',
+  })
+  const [profileForm, setProfileForm] = useState({
+    name: initialUser?.name ?? '',
   })
 
   const admin = isAdmin(user)
@@ -654,6 +657,27 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
         await apiFetch(`/api/admin/users/${entry.id}/password`, { method: 'POST' }),
       )
       setNotice(`${pending ? 'Invite' : 'Password reset'} email sent to ${entry.email}`)
+    } catch (submitError) {
+      setError(submitError.message)
+    }
+  }
+
+  async function handleUpdateProfile(event) {
+    event.preventDefault()
+    setNotice('')
+    setError('')
+    try {
+      const data = await readJson(
+        await apiFetch('/api/auth/me', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(profileForm),
+        }),
+      )
+      setUser(data.user)
+      setUsers((current) => current.map((entry) => (entry.id === data.user.id ? data.user : entry)))
+      setProfileForm({ name: data.user.name })
+      setNotice('Profile updated')
     } catch (submitError) {
       setError(submitError.message)
     }
@@ -1517,13 +1541,40 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
             <div className="space-y-6">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#F58220]">Account</p>
-                <h1 className="mt-1 text-2xl font-semibold">Change password</h1>
+                <h1 className="mt-1 text-2xl font-semibold">Profile settings</h1>
                 <p className="mt-1 text-sm text-[#3C3D41]/70">
-                  There is no forgot-password email. After you are signed in, you can set a new password here. An
-                  admin can generate a new password for someone else and send it manually.
+                  Update your display name and keep your password secure.
                 </p>
               </div>
+
+              <form onSubmit={handleUpdateProfile} className="max-w-md rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
+                <h2 className="text-lg font-semibold">Profile</h2>
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Name</span>
+                  <input
+                    value={profileForm.name}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))}
+                    className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Email</span>
+                  <input
+                    value={user.email}
+                    readOnly
+                    className="w-full rounded-lg border border-[#3C3D41]/15 bg-[#f7f5f2] px-3 py-2 text-[#3C3D41]/70"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                >
+                  Save profile
+                </button>
+              </form>
+
               <form onSubmit={handleChangeOwnPassword} className="max-w-md rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
+                <h2 className="text-lg font-semibold">Change password</h2>
                 <PasswordField
                   className="mt-0"
                   label="Current password"
