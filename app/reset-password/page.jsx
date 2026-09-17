@@ -49,7 +49,7 @@ export default function ResetPasswordPage() {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#F58220]">Mobikasa</p>
           <h1 className="mt-2 text-2xl font-semibold">Set password</h1>
           <p className="mt-2 text-sm text-[#3C3D41]/70">
-            Enter a new password for your account. Use at least 10 characters.
+            Enter a new password for your account. Use at least 8 characters.
           </p>
 
           {!token && (
