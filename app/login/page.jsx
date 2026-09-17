@@ -1,6 +1,7 @@
 'use client'
 
 import Image from 'next/image'
+import Link from 'next/link'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { PasswordField } from '../../components/password-field.jsx'
@@ -80,6 +81,11 @@ export default function LoginPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
+            <div className="mt-2 text-right">
+              <Link href="/forgot-password" className="text-sm font-medium text-[#F58220] hover:underline">
+                Forgot password?
+              </Link>
+            </div>
 
             {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
 

@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import AuditWizard from './audit-wizard'
 import { ProjectDefaultTypography } from './typography-editor.jsx'
 import { AssignedProjectChips, ProjectChecklist } from './project-checklist.jsx'
-import { GeneratedPasswordReveal, PasswordField } from './password-field.jsx'
+import { PasswordField } from './password-field.jsx'
 import {
   RETENTION_OPTIONS,
   ROLE,
@@ -18,9 +18,9 @@ import {
   roleLabel,
 } from '../lib/roles.js'
 
-const GENERATED_PASSWORD_VISIBLE_MS = 8000
 const ACTIVITY_PAGE_SIZE = 20
 const LAST_PROJECT_STORAGE_KEY = 'audit-last-selected-project'
+const BULK_INVITE_LIMIT = 25
 
 const SUITE_LABELS = {
   pixelmatch: 'Perfect Pixel',
@@ -50,8 +50,53 @@ const ACTIVITY_LABELS = {
   'member.removed': 'Removed from project',
   'member.assigned': 'Projects updated',
   'member.role_changed': 'Project role changed',
+  'user.invite_accepted': 'Invite accepted',
+  'user.password_reset': 'Password reset',
   'report.created': 'Report saved',
   'report.deleted': 'Report deleted',
+}
+
+function parseInviteEntries(value) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, BULK_INVITE_LIMIT)
+    .map((line) => {
+      const commaIndex = line.indexOf(',')
+      if (commaIndex >= 0) {
+        const name = line.slice(0, commaIndex).trim()
+        const email = line.slice(commaIndex + 1).trim()
+        return { name: name || email.split('@')[0], email }
+      }
+      return { name: line.split('@')[0], email: line }
+    })
+}
+
+function normalizeInviteResults(data) {
+  if (Array.isArray(data.results)) return data.results
+  if (data.user) {
+    return [
+      {
+        status: 'ok',
+        user: data.user,
+        created: data.created,
+        emailSent: data.emailSent,
+      },
+    ]
+  }
+  return []
+}
+
+function inviteResultsNotice(results) {
+  const sent = results.filter((result) => result.status === 'ok' && result.emailSent).length
+  const assigned = results.filter((result) => result.status === 'ok' && !result.emailSent).length
+  const failed = results.filter((result) => result.status === 'error').length
+  const parts = []
+  if (sent) parts.push(`${sent} invite email${sent === 1 ? '' : 's'} sent`)
+  if (assigned) parts.push(`${assigned} existing user${assigned === 1 ? '' : 's'} assigned`)
+  if (failed) parts.push(`${failed} failed`)
+  return parts.join(', ') || 'No invites processed'
 }
 
 function toDateKey(value) {
@@ -100,7 +145,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [projectName, setProjectName] = useState('')
   const [projectMemberIds, setProjectMemberIds] = useState([])
 
-  const [generatedPassword, setGeneratedPassword] = useState('')
+  const [inviteResults, setInviteResults] = useState([])
   const [members, setMembers] = useState([])
   const [membersProjectId, setMembersProjectId] = useState('')
   const [reports, setReports] = useState([])
@@ -123,14 +168,12 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const restoredProjectRef = useRef(false)
   const [creatingUser, setCreatingUser] = useState(false)
   const [inviteForm, setInviteForm] = useState({
-    name: '',
-    email: '',
+    entries: '',
     role: ROLE.DEV,
   })
 
   const [userForm, setUserForm] = useState({
-    name: '',
-    email: '',
+    entries: '',
     role: ROLE.DEV,
     projectIds: [],
   })
@@ -145,17 +188,11 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setGeneratedPassword('')
+      setInviteResults([])
       setAssignEditor(null)
     }, 0)
     return () => window.clearTimeout(timer)
   }, [view, selectedProjectId, projectTab])
-
-  useEffect(() => {
-    if (!generatedPassword) return undefined
-    const timer = window.setTimeout(() => setGeneratedPassword(''), GENERATED_PASSWORD_VISIBLE_MS)
-    return () => window.clearTimeout(timer)
-  }, [generatedPassword])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -422,25 +459,30 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     if (!selectedProject) return
     setNotice('')
     setError('')
-    setGeneratedPassword('')
+    setInviteResults([])
+    const usersToInvite = parseInviteEntries(inviteForm.entries)
+    if (usersToInvite.length === 0) {
+      setError('Enter at least one email to invite')
+      return
+    }
     try {
       const data = await readJson(
         await apiFetch(`/api/projects/${selectedProject.id}/members`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(inviteForm),
+          body: JSON.stringify({
+            users: usersToInvite,
+            role: inviteForm.role,
+          }),
         }),
       )
-      setInviteForm({ name: '', email: '', role: ROLE.DEV })
-      if (data.temporaryPassword) setGeneratedPassword(data.temporaryPassword)
+      const results = normalizeInviteResults(data)
+      setInviteResults(results)
+      setInviteForm({ entries: '', role: ROLE.DEV })
       await refreshProjects()
       await loadProjectExtras(selectedProject.id)
       if (canManage) await refreshAdminUsers()
-      setNotice(
-        data.created
-          ? `${data.user.email} was added. Copy the generated password below and send it to them yourself.`
-          : `${data.user.email} was added to this project.`,
-      )
+      setNotice(inviteResultsNotice(results))
     } catch (submitError) {
       setError(submitError.message)
     }
@@ -489,37 +531,43 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     if (creatingUser) return
     setNotice('')
     setError('')
+    setInviteResults([])
+    const usersToInvite = parseInviteEntries(userForm.entries)
+    if (usersToInvite.length === 0) {
+      setError('Enter at least one email to invite')
+      return
+    }
     setCreatingUser(true)
     try {
       const data = await readJson(
         await apiFetch('/api/admin/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(userForm),
+          body: JSON.stringify({
+            users: usersToInvite,
+            role: userForm.role,
+            projectIds: userForm.projectIds,
+          }),
         }),
       )
+      const results = normalizeInviteResults(data)
+      const savedUsers = results.filter((result) => result.status === 'ok' && result.user).map((result) => result.user)
       setUsers((current) => {
-        if (current.some((entry) => entry.id === data.user.id)) {
-          return current.map((entry) => (entry.id === data.user.id ? data.user : entry))
+        let next = [...current]
+        for (const savedUser of savedUsers) {
+          next = next.some((entry) => entry.id === savedUser.id)
+            ? next.map((entry) => (entry.id === savedUser.id ? savedUser : entry))
+            : [...next, savedUser]
         }
-        return [...current, data.user]
+        return next
       })
       setUserForm({
-        name: '',
-        email: '',
+        entries: '',
         role: ROLE.DEV,
         projectIds: [],
       })
-      if (data.temporaryPassword) {
-        setGeneratedPassword(data.temporaryPassword)
-        setNotice(
-          `${data.user.email} was created. Copy the generated password below and send it to them yourself.`,
-        )
-      } else if (data.created === false) {
-        setNotice(`${data.user.email} already exists and was assigned to the selected projects.`)
-      } else {
-        setNotice('User created')
-      }
+      setInviteResults(results)
+      setNotice(inviteResultsNotice(results))
       refreshAdminUsers().catch((loadError) => setError(loadError.message))
       refreshProjects().catch((loadError) => setError(loadError.message))
     } catch (submitError) {
@@ -583,16 +631,15 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   }
 
   async function handleAssignPassword(entry) {
-    if (!window.confirm(`Generate a new password for ${entry.email}? Their current password will stop working.`)) return
+    if (!window.confirm(`Send a password reset email to ${entry.email}?`)) return
     setNotice('')
     setError('')
-    setGeneratedPassword('')
+    setInviteResults([])
     try {
-      const data = await readJson(
+      await readJson(
         await apiFetch(`/api/admin/users/${entry.id}/password`, { method: 'POST' }),
       )
-      setGeneratedPassword(data.temporaryPassword)
-      setNotice(`New password generated for ${entry.email}. Copy it below and send it to them yourself.`)
+      setNotice(`Password reset email sent to ${entry.email}`)
     } catch (submitError) {
       setError(submitError.message)
     }
@@ -777,7 +824,23 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
               {notice}
             </div>
           )}
-          {generatedPassword && <GeneratedPasswordReveal key={generatedPassword} password={generatedPassword} />}
+          {inviteResults.length > 0 && (
+            <div className="mb-4 rounded-xl border border-[#3C3D41]/10 bg-white px-4 py-3 text-sm">
+              <p className="font-semibold">Invite results</p>
+              <ul className="mt-2 space-y-1">
+                {inviteResults.map((result, index) => (
+                  <li
+                    key={`${result.user?.id ?? result.email ?? 'invite'}-${index}`}
+                    className={result.status === 'error' ? 'text-red-600' : 'text-[#3C3D41]/75'}
+                  >
+                    {result.status === 'error'
+                      ? `${result.email || 'User'}: ${result.error}`
+                      : `${result.user.email}: ${result.emailSent ? 'invite email sent' : 'existing user assigned'}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {view === 'audit' && selectedProject && (
             <div className="space-y-6">
@@ -826,28 +889,21 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     <form onSubmit={handleInviteMember} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                       <h2 className="text-lg font-semibold">Invite to this project</h2>
                       <p className="text-sm text-[#3C3D41]/70">
-                        A new person is added to the main user list and allocated only to this project. We generate a
-                        password — copy it and send it yourself. An existing person is added here without changing their
-                        password.
+                        Enter one user per line. New users receive a secure email link to set their password. Existing
+                        users are added here without changing their password.
                         {admin ? '' : ' Project admins can only add Dev users.'}
                       </p>
-                      <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-4 md:grid-cols-[1.4fr_0.6fr]">
                         <label className="space-y-1">
-                          <span className="text-sm font-medium">Name</span>
-                          <input
-                            value={inviteForm.name}
-                            onChange={(event) => setInviteForm((current) => ({ ...current, name: event.target.value }))}
+                          <span className="text-sm font-medium">Users</span>
+                          <textarea
+                            rows={5}
+                            placeholder={'Jane Doe, jane@example.com\njohn@example.com'}
+                            value={inviteForm.entries}
+                            onChange={(event) => setInviteForm((current) => ({ ...current, entries: event.target.value }))}
                             className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
                           />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm font-medium">Email</span>
-                          <input
-                            type="email"
-                            value={inviteForm.email}
-                            onChange={(event) => setInviteForm((current) => ({ ...current, email: event.target.value }))}
-                            className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                          />
+                          <span className="text-xs text-[#3C3D41]/55">Maximum {BULK_INVITE_LIMIT} users at a time.</span>
                         </label>
                         <label className="space-y-1">
                           <span className="text-sm font-medium">Role on this project</span>
@@ -1194,24 +1250,21 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
               {admin && (
                 <form onSubmit={handleCreateUser} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
-                  <h2 className="text-lg font-semibold">Create user</h2>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <h2 className="text-lg font-semibold">Invite users</h2>
+                  <p className="text-sm text-[#3C3D41]/70">
+                    Enter one user per line. New users receive a secure email link to set their password.
+                  </p>
+                  <div className="grid gap-4 md:grid-cols-[1.4fr_0.6fr]">
                     <label className="space-y-1">
-                      <span className="text-sm font-medium">Name</span>
-                      <input
-                        value={userForm.name}
-                        onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))}
+                      <span className="text-sm font-medium">Users</span>
+                      <textarea
+                        rows={5}
+                        placeholder={'Jane Doe, jane@example.com\njohn@example.com'}
+                        value={userForm.entries}
+                        onChange={(event) => setUserForm((current) => ({ ...current, entries: event.target.value }))}
                         className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
                       />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-sm font-medium">Email</span>
-                      <input
-                        type="email"
-                        value={userForm.email}
-                        onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
-                        className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                      />
+                      <span className="text-xs text-[#3C3D41]/55">Maximum {BULK_INVITE_LIMIT} users at a time.</span>
                     </label>
                     <label className="space-y-1">
                       <span className="text-sm font-medium">Platform role</span>
@@ -1245,7 +1298,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     disabled={creatingUser}
                     className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer disabled:opacity-40"
                   >
-                    {creatingUser ? 'Creating…' : 'Create user'}
+                    {creatingUser ? 'Sending invites...' : 'Send invites'}
                   </button>
                 </form>
               )}
@@ -1297,7 +1350,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                                 onClick={() => handleAssignPassword(entry)}
                                 className="text-[#F58220] hover:underline cursor-pointer"
                               >
-                                New password
+                                Send reset email
                               </button>
                               {admin && (
                                 <button
