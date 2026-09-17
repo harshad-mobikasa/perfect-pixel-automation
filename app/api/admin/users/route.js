@@ -39,7 +39,7 @@ export async function POST(request) {
         results.push(await inviteUserAndSendEmail(auth.user, request, {
           email: row?.email,
           name: row?.name,
-          role: body?.role,
+          role: row?.role ?? body?.role,
           projectIds: body?.projectIds,
         }))
       }

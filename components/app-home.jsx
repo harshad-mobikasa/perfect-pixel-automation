@@ -56,21 +56,26 @@ const ACTIVITY_LABELS = {
   'report.deleted': 'Report deleted',
 }
 
-function parseInviteEntries(value) {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, BULK_INVITE_LIMIT)
-    .map((line) => {
-      const commaIndex = line.indexOf(',')
-      if (commaIndex >= 0) {
-        const name = line.slice(0, commaIndex).trim()
-        const email = line.slice(commaIndex + 1).trim()
-        return { name: name || email.split('@')[0], email }
-      }
-      return { name: line.split('@')[0], email: line }
-    })
+let inviteRowId = 0
+
+function createInviteRow(role = ROLE.DEV) {
+  inviteRowId += 1
+  return {
+    id: `invite-row-${inviteRowId}`,
+    name: '',
+    email: '',
+    role,
+  }
+}
+
+function inviteRowsToUsers(rows) {
+  return rows
+    .map((row) => ({
+      name: row.name.trim(),
+      email: row.email.trim(),
+      role: row.role,
+    }))
+    .filter((row) => row.name || row.email)
 }
 
 function normalizeInviteResults(data) {
@@ -144,6 +149,87 @@ function InviteStatusBadge({ user }) {
   )
 }
 
+function InviteRowsEditor({ rows, onChange, roleOptions, roleLabel = 'Role' }) {
+  function updateRow(rowId, patch) {
+    onChange(rows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)))
+  }
+
+  function addRow() {
+    if (rows.length >= BULK_INVITE_LIMIT) return
+    onChange([...rows, createInviteRow(roleOptions[0]?.value ?? ROLE.DEV)])
+  }
+
+  function removeRow(rowId) {
+    if (rows.length <= 1) return
+    onChange(rows.filter((row) => row.id !== rowId))
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="hidden grid-cols-[1fr_1.2fr_0.8fr_auto] gap-3 text-xs font-semibold uppercase tracking-wide text-[#3C3D41]/50 md:grid">
+        <span>Name</span>
+        <span>Email</span>
+        <span>{roleLabel}</span>
+        <span>Action</span>
+      </div>
+      {rows.map((row, index) => (
+        <div key={row.id} className="grid gap-3 rounded-xl border border-[#3C3D41]/10 p-3 md:grid-cols-[1fr_1.2fr_0.8fr_auto] md:items-center">
+          <label className="space-y-1 md:space-y-0">
+            <span className="text-xs font-medium text-[#3C3D41]/60 md:hidden">Name</span>
+            <input
+              value={row.name}
+              onChange={(event) => updateRow(row.id, { name: event.target.value })}
+              placeholder={`User ${index + 1}`}
+              className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
+            />
+          </label>
+          <label className="space-y-1 md:space-y-0">
+            <span className="text-xs font-medium text-[#3C3D41]/60 md:hidden">Email</span>
+            <input
+              type="email"
+              value={row.email}
+              onChange={(event) => updateRow(row.id, { email: event.target.value })}
+              placeholder="name@example.com"
+              className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
+            />
+          </label>
+          <label className="space-y-1 md:space-y-0">
+            <span className="text-xs font-medium text-[#3C3D41]/60 md:hidden">{roleLabel}</span>
+            <select
+              value={row.role}
+              onChange={(event) => updateRow(row.id, { role: event.target.value })}
+              className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
+            >
+              {roleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => removeRow(row.id)}
+            disabled={rows.length <= 1}
+            className="rounded-lg border border-[#3C3D41]/15 px-3 py-2 text-sm font-medium text-[#3C3D41]/70 disabled:opacity-40 cursor-pointer"
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addRow}
+        disabled={rows.length >= BULK_INVITE_LIMIT}
+        className="rounded-lg border border-[#F58220]/40 px-4 py-2 text-sm font-semibold text-[#F58220] hover:bg-[#F58220]/5 disabled:opacity-40 cursor-pointer"
+      >
+        + Add user
+      </button>
+      <p className="text-xs text-[#3C3D41]/55">Maximum {BULK_INVITE_LIMIT} users at a time.</p>
+    </div>
+  )
+}
+
 export default function AppHome({ initialUser, initialProjects = [], initialUsers = [] }) {
   const router = useRouter()
   const [user, setUser] = useState(initialUser)
@@ -180,14 +266,9 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const extrasRequestRef = useRef(0)
   const restoredProjectRef = useRef(false)
   const [creatingUser, setCreatingUser] = useState(false)
-  const [inviteForm, setInviteForm] = useState({
-    entries: '',
-    role: ROLE.DEV,
-  })
-
+  const [projectInviteRows, setProjectInviteRows] = useState([createInviteRow()])
+  const [userInviteRows, setUserInviteRows] = useState([createInviteRow()])
   const [userForm, setUserForm] = useState({
-    entries: '',
-    role: ROLE.DEV,
     projectIds: [],
   })
   const [passwordForm, setPasswordForm] = useState({
@@ -246,7 +327,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
         { value: ROLE.PROJECT_ADMIN, label: 'Project admin' },
       ]
     : [{ value: ROLE.DEV, label: 'Dev' }]
-  const needsProjectAssignment = userForm.role === ROLE.DEV || userForm.role === ROLE.PROJECT_ADMIN
+  const needsProjectAssignment = userInviteRows.some((row) => row.role !== ROLE.ADMIN)
   const selectedProjectReports = useMemo(
     () => (reportsProjectId === selectedProjectId ? reports : []),
     [reports, reportsProjectId, selectedProjectId],
@@ -476,7 +557,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setNotice('')
     setError('')
     setInviteResults([])
-    const usersToInvite = parseInviteEntries(inviteForm.entries)
+    const usersToInvite = inviteRowsToUsers(projectInviteRows)
     if (usersToInvite.length === 0) {
       setError('Enter at least one email to invite')
       return
@@ -488,13 +569,12 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             users: usersToInvite,
-            role: inviteForm.role,
           }),
         }),
       )
       const results = normalizeInviteResults(data)
       setInviteResults(results)
-      setInviteForm({ entries: '', role: ROLE.DEV })
+      setProjectInviteRows([createInviteRow()])
       await refreshProjects()
       await loadProjectExtras(selectedProject.id)
       if (canManage) await refreshAdminUsers()
@@ -548,7 +628,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     setNotice('')
     setError('')
     setInviteResults([])
-    const usersToInvite = parseInviteEntries(userForm.entries)
+    const usersToInvite = inviteRowsToUsers(userInviteRows)
     if (usersToInvite.length === 0) {
       setError('Enter at least one email to invite')
       return
@@ -561,7 +641,6 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             users: usersToInvite,
-            role: userForm.role,
             projectIds: userForm.projectIds,
           }),
         }),
@@ -578,10 +657,9 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
         return next
       })
       setUserForm({
-        entries: '',
-        role: ROLE.DEV,
         projectIds: [],
       })
+      setUserInviteRows([createInviteRow()])
       setInviteResults(results)
       setNotice(inviteResultsNotice(results))
       refreshAdminUsers().catch((loadError) => setError(loadError.message))
@@ -927,37 +1005,15 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     <form onSubmit={handleInviteMember} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                       <h2 className="text-lg font-semibold">Invite to this project</h2>
                       <p className="text-sm text-[#3C3D41]/70">
-                        Enter one user per line. New users receive a secure email link to set their password. Existing
-                        users are added here without changing their password.
+                        Add one or more users, choose the project role for each person, and send secure invite emails.
                         {admin ? '' : ' Project admins can only add Dev users.'}
                       </p>
-                      <div className="grid gap-4 md:grid-cols-[1.4fr_0.6fr]">
-                        <label className="space-y-1">
-                          <span className="text-sm font-medium">Users</span>
-                          <textarea
-                            rows={5}
-                            placeholder={'Jane Doe, jane@example.com\njohn@example.com'}
-                            value={inviteForm.entries}
-                            onChange={(event) => setInviteForm((current) => ({ ...current, entries: event.target.value }))}
-                            className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                          />
-                          <span className="text-xs text-[#3C3D41]/55">Maximum {BULK_INVITE_LIMIT} users at a time.</span>
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm font-medium">Role on this project</span>
-                          <select
-                            value={inviteForm.role}
-                            onChange={(event) => setInviteForm((current) => ({ ...current, role: event.target.value }))}
-                            className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                          >
-                            {teamRoleOptions.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
+                      <InviteRowsEditor
+                        rows={projectInviteRows}
+                        onChange={setProjectInviteRows}
+                        roleOptions={teamRoleOptions}
+                        roleLabel="Project role"
+                      />
                       <button
                         type="submit"
                         className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
@@ -1292,37 +1348,19 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 <form onSubmit={handleCreateUser} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                   <h2 className="text-lg font-semibold">Invite users</h2>
                   <p className="text-sm text-[#3C3D41]/70">
-                    Enter one user per line. New users receive a secure email link to set their password.
+                    Add users one by one, choose a role for each, then send secure invite emails.
                   </p>
-                  <div className="grid gap-4 md:grid-cols-[1.4fr_0.6fr]">
-                    <label className="space-y-1">
-                      <span className="text-sm font-medium">Users</span>
-                      <textarea
-                        rows={5}
-                        placeholder={'Jane Doe, jane@example.com\njohn@example.com'}
-                        value={userForm.entries}
-                        onChange={(event) => setUserForm((current) => ({ ...current, entries: event.target.value }))}
-                        className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                      />
-                      <span className="text-xs text-[#3C3D41]/55">Maximum {BULK_INVITE_LIMIT} users at a time.</span>
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-sm font-medium">Platform role</span>
-                      <select
-                        value={userForm.role}
-                        onChange={(event) =>
-                          setUserForm((current) => ({ ...current, role: event.target.value, projectIds: [] }))
-                        }
-                        className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
-                      >
-                        {inviteRoles.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
+                  <InviteRowsEditor
+                    rows={userInviteRows}
+                    onChange={(rows) => {
+                      setUserInviteRows(rows)
+                      if (rows.every((row) => row.role === ROLE.ADMIN)) {
+                        setUserForm((current) => ({ ...current, projectIds: [] }))
+                      }
+                    }}
+                    roleOptions={inviteRoles}
+                    roleLabel="Platform role"
+                  />
                   {needsProjectAssignment && (
                     <div className="space-y-2">
                       <span className="text-sm font-medium">Assign to projects</span>

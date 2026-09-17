@@ -46,7 +46,7 @@ export async function POST(request, { params }) {
         results.push(await inviteProjectMemberAndSendEmail(auth.user, request, projectId, {
           email: row?.email,
           name: row?.name,
-          role: body?.role,
+          role: row?.role ?? body?.role,
         }))
       }
       return Response.json({ results }, { status: 207 })
