@@ -252,6 +252,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   const [projectName, setProjectName] = useState('')
   const [projectMemberIds, setProjectMemberIds] = useState([])
+  const [creatingProject, setCreatingProject] = useState(false)
 
   const [inviteResults, setInviteResults] = useState([])
   const [members, setMembers] = useState([])
@@ -564,8 +565,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
 
   async function handleCreateProject(event) {
     event.preventDefault()
+    if (creatingProject) return
     setNotice('')
     setError('')
+    setCreatingProject(true)
     try {
       const data = await readJson(
         await apiFetch('/api/projects', {
@@ -586,6 +589,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       setNotice('Project created')
     } catch (submitError) {
       setError(submitError.message)
+    } finally {
+      setCreatingProject(false)
     }
   }
 
@@ -1410,6 +1415,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     value={projectName}
                     onChange={(event) => setProjectName(event.target.value)}
                     placeholder="Acme Storefront"
+                    disabled={creatingProject}
                     className="w-full rounded-lg border border-[#3C3D41]/15 px-3 py-2 outline-none focus:ring-2 focus:ring-[#F58220]"
                   />
                 </label>
@@ -1424,6 +1430,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         type="checkbox"
                         checked={projectMemberIds.includes(entry.id)}
                         onChange={() => setProjectMemberIds((current) => toggleValue(current, entry.id))}
+                        disabled={creatingProject}
                       />
                       {entry.name} ({entry.email})
                     </label>
@@ -1431,9 +1438,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 </fieldset>
                 <button
                   type="submit"
-                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] cursor-pointer"
+                  disabled={creatingProject}
+                  className="rounded-lg bg-[#F58220] px-4 py-2 text-sm font-semibold text-white hover:bg-[#e27518] disabled:opacity-50 cursor-pointer"
                 >
-                  Create project
+                  {creatingProject ? 'Project creating...' : 'Create project'}
                 </button>
               </form>
 
