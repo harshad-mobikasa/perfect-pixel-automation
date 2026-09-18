@@ -1482,7 +1482,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                 <form onSubmit={handleCreateUser} className="rounded-2xl border border-[#3C3D41]/10 bg-white p-6 space-y-4">
                   <h2 className="text-lg font-semibold">Invite users</h2>
                   <p className="text-sm text-[#3C3D41]/70">
-                    Add users one by one, choose a role for each, then send secure invite emails.
+                    Add users one by one, choose a role for each, then send secure invite emails. Project assignment is optional for platform admins.
                   </p>
                   <InviteRowsEditor
                     rows={userInviteRows}
@@ -1497,7 +1497,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                   />
                   {needsProjectAssignment && (
                     <div className="space-y-2">
-                      <span className="text-sm font-medium">Assign to projects</span>
+                      <span className="text-sm font-medium">Assign to projects (optional)</span>
                       <ProjectChecklist
                         projects={projects}
                         selectedIds={userForm.projectIds}
