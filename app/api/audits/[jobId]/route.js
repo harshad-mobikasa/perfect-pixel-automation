@@ -46,6 +46,8 @@ export async function GET(_request, { params }) {
     workerOnline: Boolean(workerHeartbeat?.at),
     workerLastSeenAt: workerHeartbeat?.at ?? null,
     workerTriggeredAt: job.workerTriggeredAt ?? null,
+    emailNotificationSentAt: job.emailNotificationSentAt ?? null,
+    emailNotificationError: job.emailNotificationError ?? null,
     reportFiles:
       job.status === 'done'
         ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName }))

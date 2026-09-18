@@ -73,6 +73,8 @@ async function summarizeUserJobs(jobStore, userId, projectId) {
       workerOnline: worker.workerOnline,
       workerLastSeenAt: worker.workerLastSeenAt,
       workerTriggeredAt: job.workerTriggeredAt ?? null,
+      emailNotificationSentAt: job.emailNotificationSentAt ?? null,
+      emailNotificationError: job.emailNotificationError ?? null,
       reportFiles:
         job.status === 'done' ? (job.reportFiles ?? []).map((file) => ({ fileName: file.fileName })) : [],
     })
