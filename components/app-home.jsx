@@ -122,6 +122,15 @@ function formatDateTime(value) {
   }).format(date)
 }
 
+function expiryText(value) {
+  const expiresAt = new Date(value).getTime()
+  if (Number.isNaN(expiresAt)) return 'Unknown'
+  const days = Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000))
+  if (days <= 0) return 'Expires today'
+  if (days === 1) return 'Expires tomorrow'
+  return `Expires in ${days} days`
+}
+
 function inDateRange(createdAt, from, to) {
   const key = toDateKey(createdAt)
   if (!key) return false
@@ -253,6 +262,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [selectedReportIds, setSelectedReportIds] = useState([])
   const [reportDateFrom, setReportDateFrom] = useState('')
   const [reportDateTo, setReportDateTo] = useState('')
+  const [reportSuiteFilter, setReportSuiteFilter] = useState('')
+  const [reportUserFilter, setReportUserFilter] = useState('')
   const [activityEvents, setActivityEvents] = useState([])
   const [activityLoading, setActivityLoading] = useState(false)
   const [activityPage, setActivityPage] = useState(1)
@@ -260,6 +271,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
   const [activityDateFrom, setActivityDateFrom] = useState('')
   const [activityDateTo, setActivityDateTo] = useState('')
   const [activityRetentionDays, setActivityRetentionDays] = useState(45)
+  const [adminJobs, setAdminJobs] = useState([])
+  const [adminJobsLoading, setAdminJobsLoading] = useState(false)
   const [assignEditor, setAssignEditor] = useState(null)
   const [assignDraftIds, setAssignDraftIds] = useState([])
   const [assignSaving, setAssignSaving] = useState(false)
@@ -333,9 +346,27 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     [reports, reportsProjectId, selectedProjectId],
   )
   const visibleReports = useMemo(
-    () => selectedProjectReports.filter((report) => inDateRange(report.createdAt, reportDateFrom, reportDateTo)),
-    [selectedProjectReports, reportDateFrom, reportDateTo],
+    () =>
+      selectedProjectReports.filter((report) => {
+        if (!inDateRange(report.createdAt, reportDateFrom, reportDateTo)) return false
+        if (reportSuiteFilter && report.suite !== reportSuiteFilter) return false
+        if (reportUserFilter && report.createdBy?.userId !== reportUserFilter) return false
+        return true
+      }),
+    [selectedProjectReports, reportDateFrom, reportDateTo, reportSuiteFilter, reportUserFilter],
   )
+  const reportUsers = useMemo(() => {
+    const byId = new Map()
+    for (const report of selectedProjectReports) {
+      const userId = report.createdBy?.userId
+      if (!userId || byId.has(userId)) continue
+      byId.set(userId, {
+        id: userId,
+        name: report.createdBy?.name || report.createdBy?.email || 'Unknown',
+      })
+    }
+    return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name))
+  }, [selectedProjectReports])
   const reportsReadyForSelectedProject = Boolean(
     selectedProject && !reportsLoading && reportsProjectId === selectedProject.id,
   )
@@ -353,6 +384,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
         id: member.userId,
         name: match?.name ?? 'Unknown',
         email: match?.email ?? '',
+        inviteStatus: match?.inviteStatus ?? 'active',
         projectRole: member.role,
       }
     })
@@ -378,10 +410,14 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       setReportsProjectId('')
       setReportsLoading(false)
       setSelectedReportIds([])
+      setReportSuiteFilter('')
+      setReportUserFilter('')
       return
     }
 
     setSelectedReportIds([])
+    setReportSuiteFilter('')
+    setReportUserFilter('')
     setReportsProjectId(projectId)
     setReports([])
     setReportsLoading(true)
@@ -463,6 +499,45 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
     }
   }
 
+  async function loadAdminJobs() {
+    if (!admin) return
+    setAdminJobsLoading(true)
+    try {
+      const data = await readJson(await apiFetch('/api/admin/audit-jobs'))
+      setAdminJobs(Array.isArray(data.jobs) ? data.jobs : [])
+    } finally {
+      setAdminJobsLoading(false)
+    }
+  }
+
+  async function openAdminJobs() {
+    setView('jobs')
+    setError('')
+    try {
+      await loadAdminJobs()
+    } catch (loadError) {
+      setError(loadError.message)
+    }
+  }
+
+  async function handleAdminJobAction(jobId, action) {
+    setNotice('')
+    setError('')
+    try {
+      await readJson(
+        await apiFetch('/api/admin/audit-jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId, action }),
+        }),
+      )
+      await loadAdminJobs()
+      setNotice(action === 'retry' ? 'Audit job queued again' : 'Audit job removed')
+    } catch (submitError) {
+      setError(submitError.message)
+    }
+  }
+
   async function signOut() {
     await apiFetch('/api/auth/logout', { method: 'POST' })
     router.replace('/login')
@@ -481,6 +556,8 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
       setReportsProjectId(projectId)
       setReportsLoading(true)
       setSelectedReportIds([])
+        setReportSuiteFilter('')
+        setReportUserFilter('')
     }
     loadProjectExtras(projectId).catch((loadError) => setError(loadError.message))
   }
@@ -880,6 +957,17 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                     Manage projects
                   </button>
                 )}
+                {admin && (
+                  <button
+                    type="button"
+                    onClick={() => openAdminJobs()}
+                    className={`w-full rounded-lg px-3 py-2 text-left text-sm cursor-pointer ${
+                      view === 'jobs' ? 'bg-white/15 text-white' : 'text-white/80 hover:bg-white/10'
+                    }`}
+                  >
+                    Audit jobs
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setView('users')}
@@ -1074,7 +1162,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         ))}
                         {teamMembers.length === 0 && (
                           <tr>
-                            <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={canManageSelected ? 4 : 3}>
+                            <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={canManageSelected ? 5 : 4}>
                               No project members yet.
                             </td>
                           </tr>
@@ -1115,12 +1203,55 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
                           />
                         </label>
+                        <label className="space-y-1 text-sm">
+                          <span className="font-medium">Audit type</span>
+                          <select
+                            value={reportSuiteFilter}
+                            onChange={(event) => setReportSuiteFilter(event.target.value)}
+                            className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
+                          >
+                            <option value="">All audits</option>
+                            {Object.entries(SUITE_LABELS).map(([suite, label]) => (
+                              <option key={suite} value={suite}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="space-y-1 text-sm">
+                          <span className="font-medium">Run by</span>
+                          <select
+                            value={reportUserFilter}
+                            onChange={(event) => setReportUserFilter(event.target.value)}
+                            className="block rounded-lg border border-[#3C3D41]/15 px-3 py-2"
+                          >
+                            <option value="">All users</option>
+                            {reportUsers.map((entry) => (
+                              <option key={entry.id} value={entry.id}>
+                                {entry.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                         <button
                           type="button"
                           onClick={selectVisibleReports}
                           className="rounded-lg border border-[#3C3D41]/15 px-3 py-2 text-sm cursor-pointer"
                         >
                           Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReportDateFrom('')
+                            setReportDateTo('')
+                            setReportSuiteFilter('')
+                            setReportUserFilter('')
+                            setSelectedReportIds([])
+                          }}
+                          className="rounded-lg border border-[#3C3D41]/15 px-3 py-2 text-sm cursor-pointer"
+                        >
+                          Clear filters
                         </button>
                         <button
                           type="button"
@@ -1180,7 +1311,10 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                             {report.createdBy?.name || 'Unknown'}
                             {report.createdBy?.email ? ` (${report.createdBy.email})` : ''}
                           </td>
-                          <td className="px-4 py-3">{formatDateTime(report.expiresAt)}</td>
+                          <td className="px-4 py-3">
+                            <div>{formatDateTime(report.expiresAt)}</div>
+                            <div className="text-xs text-[#3C3D41]/55">{expiryText(report.expiresAt)}</div>
+                          </td>
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-1">
                               {(report.files ?? []).map((file) => (
@@ -1203,7 +1337,7 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                               ? 'Loading reports for this project...'
                               : selectedProjectReports.length === 0
                               ? 'No reports stored yet. Run an audit to save one.'
-                              : 'No reports in this date range.'}
+                              : 'No reports match these filters.'}
                           </td>
                         </tr>
                       )}
@@ -1446,6 +1580,103 @@ export default function AppHome({ initialUser, initialProjects = [], initialUser
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {admin && view === 'jobs' && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#F58220]">Admin</p>
+                  <h1 className="mt-1 text-2xl font-semibold">Audit jobs</h1>
+                  <p className="mt-1 text-sm text-[#3C3D41]/70">
+                    Review recent queued, completed, and failed audits. Retry failed jobs or remove stale entries.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => loadAdminJobs().catch((loadError) => setError(loadError.message))}
+                  disabled={adminJobsLoading}
+                  className="rounded-lg border border-[#3C3D41]/15 px-4 py-2 text-sm font-medium disabled:opacity-50 cursor-pointer"
+                >
+                  {adminJobsLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-[#3C3D41]/10 bg-white">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-[#f7f5f2] text-xs uppercase tracking-wide text-[#3C3D41]/60">
+                    <tr>
+                      <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3">Project</th>
+                      <th className="px-4 py-3">Audit</th>
+                      <th className="px-4 py-3">User</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminJobs.map((job) => (
+                      <tr key={job.id} className="border-t border-[#3C3D41]/10">
+                        <td className="px-4 py-3">{formatDateTime(job.createdAt)}</td>
+                        <td className="px-4 py-3">{job.projectName}</td>
+                        <td className="px-4 py-3">{SUITE_LABELS[job.suite] ?? job.suite}</td>
+                        <td className="px-4 py-3">
+                          {job.requester?.name || 'Unknown'}
+                          {job.requester?.email ? <span className="block text-xs text-[#3C3D41]/55">{job.requester.email}</span> : null}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-full bg-[#f7f5f2] px-2 py-1 text-xs font-medium">{job.status}</span>
+                          {job.error ? <span className="mt-1 block max-w-xs truncate text-xs text-red-600">{job.error}</span> : null}
+                        </td>
+                        <td className="px-4 py-3">
+                          {job.emailNotificationError ? (
+                            <span className="text-red-600">Failed</span>
+                          ) : job.emailNotificationSentAt ? (
+                            <span className="text-green-700">Sent</span>
+                          ) : (
+                            <span className="text-[#3C3D41]/55">Pending</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleAdminJobAction(job.id, 'retry')}
+                              disabled={!['failed', 'queued'].includes(job.status)}
+                              className="text-[#F58220] hover:underline disabled:text-[#3C3D41]/30 disabled:no-underline cursor-pointer"
+                            >
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAdminJobAction(job.id, 'delete')}
+                              className="text-red-600 hover:underline cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!adminJobsLoading && adminJobs.length === 0 && (
+                      <tr>
+                        <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={7}>
+                          No recent audit jobs found.
+                        </td>
+                      </tr>
+                    )}
+                    {adminJobsLoading && (
+                      <tr>
+                        <td className="px-4 py-6 text-[#3C3D41]/60" colSpan={7}>
+                          Loading audit jobs...
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

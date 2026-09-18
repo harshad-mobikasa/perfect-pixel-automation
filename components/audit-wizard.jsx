@@ -72,6 +72,15 @@ function fmtTime(sec) {
   return s === 0 ? `~${m} min` : `~${m}m ${s}s`
 }
 
+function fmtDateTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
+}
+
 function createPage() {
   return {
     id: makeId(),
@@ -286,11 +295,14 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const [workerTriggeredAt, setWorkerTriggeredAt] = useState(null)
   const [queuedForSec, setQueuedForSec] = useState(null)
   const [reportFiles, setReportFiles] = useState([])
+  const [emailNotificationSentAt, setEmailNotificationSentAt] = useState(null)
+  const [emailNotificationError, setEmailNotificationError] = useState(null)
   const [myJobs, setMyJobs] = useState([])
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [finishedSeenAt, setFinishedSeenAt] = useState({})
   const [nowTick, setNowTick] = useState(0)
   const [starting, setStarting] = useState(false)
+  const [resendingEmail, setResendingEmail] = useState(false)
   const startRef = useRef(null)
   const pollRef = useRef(null)
   const tickRef = useRef(null)
@@ -321,6 +333,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
   const displayWorkerTriggeredAt = selectedJob?.workerTriggeredAt ?? workerTriggeredAt
   const displayQueuedForSec = selectedJob?.queuedForSec ?? queuedForSec
   const displayReportFiles = Array.isArray(selectedJob?.reportFiles) ? selectedJob.reportFiles : reportFiles
+  const displayEmailNotificationSentAt = selectedJob?.emailNotificationSentAt ?? emailNotificationSentAt
+  const displayEmailNotificationError = selectedJob?.emailNotificationError ?? emailNotificationError
   const isRunning = displayStatus === 'queued' || displayStatus === 'running'
   const hasActiveRun = myJobs.some((job) => job.status === 'queued' || job.status === 'running') || isRunning
   const showRunTabs = visibleJobs.length > 1
@@ -357,6 +371,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setWorkerTriggeredAt(null)
     setQueuedForSec(null)
     setReportFiles([])
+    setEmailNotificationSentAt(null)
+    setEmailNotificationError(null)
     startRef.current = null
   }
 
@@ -422,6 +438,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
     setWorkerTriggeredAt(job.workerTriggeredAt ?? null)
     setQueuedForSec(job.queuedForSec ?? null)
     setReportFiles(Array.isArray(job.reportFiles) ? job.reportFiles : [])
+    setEmailNotificationSentAt(job.emailNotificationSentAt ?? null)
+    setEmailNotificationError(job.emailNotificationError ?? null)
     if (job.createdAt) {
       startRef.current = job.createdAt
       setElapsed(Math.max(0, Math.floor((Date.now() - job.createdAt) / 1000)))
@@ -801,6 +819,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
         runningCount: 0,
         workerTriggeredAt: data.workerTrigger?.status === 'triggered' ? Date.now() : null,
         reportFiles: [],
+        emailNotificationSentAt: null,
+        emailNotificationError: null,
         createdAt: Date.now(),
       }
       setMyJobs((current) => [queued, ...current.filter((job) => job.id !== queued.id)])
@@ -855,6 +875,8 @@ export default function AuditWizard({ project, onSaveConfig }) {
         setWorkerTriggeredAt(data.workerTriggeredAt ?? null)
         setQueuedForSec(data.queuedForSec ?? null)
         setReportFiles(Array.isArray(data.reportFiles) ? data.reportFiles : [])
+        setEmailNotificationSentAt(data.emailNotificationSentAt ?? null)
+        setEmailNotificationError(data.emailNotificationError ?? null)
         writeStoredJob(project?.id, {
           jobId,
           suite: data.suite ?? activeSuite,
@@ -913,6 +935,41 @@ export default function AuditWizard({ project, onSaveConfig }) {
   function downloadPdf(fileName) {
     const suffix = fileName ? `?file=${encodeURIComponent(fileName)}` : ''
     window.open(`/api/audits/${selectedJob?.id ?? jobId}/download${suffix}`, '_self')
+  }
+
+  async function resendReportEmail() {
+    const targetJobId = selectedJob?.id ?? jobId
+    if (!targetJobId || resendingEmail) return
+    setResendingEmail(true)
+    try {
+      const response = await fetch(`/api/audits/${targetJobId}/email`, { method: 'POST' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error ?? 'Could not send report email')
+      }
+      const sentAt = data.emailNotificationSentAt ?? Date.now()
+      setEmailNotificationSentAt(sentAt)
+      setEmailNotificationError(null)
+      setMyJobs((current) =>
+        current.map((job) =>
+          job.id === targetJobId
+            ? { ...job, emailNotificationSentAt: sentAt, emailNotificationError: null }
+            : job,
+        ),
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not send report email'
+      setEmailNotificationError(message)
+      setMyJobs((current) =>
+        current.map((job) =>
+          job.id === targetJobId
+            ? { ...job, emailNotificationError: message }
+            : job,
+        ),
+      )
+    } finally {
+      setResendingEmail(false)
+    }
   }
 
   function goNext() {
@@ -1128,6 +1185,17 @@ export default function AuditWizard({ project, onSaveConfig }) {
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
                     Download below, or open the project <span className="font-medium">Reports</span> tab.
                   </p>
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-950">
+                    {displayEmailNotificationError ? (
+                      <span className="text-red-600 dark:text-red-400">Report email failed: {displayEmailNotificationError}</span>
+                    ) : displayEmailNotificationSentAt ? (
+                      <span className="text-green-700 dark:text-green-400">
+                        Report email sent{fmtDateTime(displayEmailNotificationSentAt) ? ` at ${fmtDateTime(displayEmailNotificationSentAt)}` : ''}
+                      </span>
+                    ) : (
+                      <span className="text-zinc-500 dark:text-zinc-400">Report email status pending.</span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-3">
                     {displayReportFiles.length > 1 ? (
                       displayReportFiles.map((file) => (
@@ -1156,6 +1224,14 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     >
                       Clear status
                     </button>
+                    <button
+                      type="button"
+                      onClick={resendReportEmail}
+                      disabled={resendingEmail}
+                      className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer disabled:opacity-50"
+                    >
+                      {resendingEmail ? 'Sending...' : 'Resend report email'}
+                    </button>
                   </div>
                 </div>
               )}
@@ -1170,6 +1246,17 @@ export default function AuditWizard({ project, onSaveConfig }) {
                     Nothing was saved to Reports for this run. This status stays here until you clear it. You can
                     start another audit without waiting.
                   </p>
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-950">
+                    {displayEmailNotificationError ? (
+                      <span className="text-red-600 dark:text-red-400">Failure email failed: {displayEmailNotificationError}</span>
+                    ) : displayEmailNotificationSentAt ? (
+                      <span className="text-green-700 dark:text-green-400">
+                        Failure email sent{fmtDateTime(displayEmailNotificationSentAt) ? ` at ${fmtDateTime(displayEmailNotificationSentAt)}` : ''}
+                      </span>
+                    ) : (
+                      <span className="text-zinc-500 dark:text-zinc-400">Failure email status pending.</span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
@@ -1177,6 +1264,14 @@ export default function AuditWizard({ project, onSaveConfig }) {
                       className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer"
                     >
                       Clear status
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resendReportEmail}
+                      disabled={resendingEmail}
+                      className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium dark:border-zinc-700 cursor-pointer disabled:opacity-50"
+                    >
+                      {resendingEmail ? 'Sending...' : 'Resend failure email'}
                     </button>
                   </div>
                 </div>
